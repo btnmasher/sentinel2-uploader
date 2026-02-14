@@ -1,17 +1,34 @@
-name: Uploader Lint
+name: Uploader
 
 on:
   pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Taskfile.yml"
+      - ".golangci.yml"
+      - ".golangci-lint-version"
+      - ".github/workflows/uploader.yml"
   push:
     branches:
       - main
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Taskfile.yml"
+      - ".golangci.yml"
+      - ".golangci-lint-version"
+      - ".github/workflows/uploader.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  lint:
+  lint-test:
+    name: Uploader lint + test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -51,3 +68,6 @@ jobs:
 
       - name: Lint uploader
         run: task lint:go
+
+      - name: Test uploader
+        run: task test:go

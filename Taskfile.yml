@@ -282,6 +282,12 @@ tasks:
         GOCACHE="{{.GO_BUILD_CACHE_DEFAULT}}" GOLANGCI_LINT_CACHE="{{.GOLANGCI_LINT_CACHE_DEFAULT}}" golangci-lint run ./...
     desc: Run uploader Go lint.
 
+  test:go:
+    cmds:
+      - mkdir -p "{{.GO_BUILD_CACHE_DEFAULT}}"
+      - GOCACHE="{{.GO_BUILD_CACHE_DEFAULT}}" go test ./... -tags headless
+    desc: Run uploader Go tests (headless tag).
+
   ensure-deps:zig:
     cmds:
       - |
