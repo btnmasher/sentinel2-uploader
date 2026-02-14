@@ -1,0 +1,295 @@
+version: "3"
+silent: true
+
+vars:
+  BIN_NAME: "sentinel2-uploader"
+  GOLANGCI_LINT_CACHE_DEFAULT: "{{.TASKFILE_DIR}}/.tmp/golangci-lint-cache"
+  GO_BUILD_CACHE_DEFAULT: "{{.TASKFILE_DIR}}/.tmp/go-build-cache"
+  ZIG_CACHE_DEFAULT: "{{.TASKFILE_DIR}}/.tmp/zig-cache"
+  BUILD_VERSION:
+    sh: |
+      if [ -n "${BUILD_VERSION:-}" ]; then
+        echo "$BUILD_VERSION"
+        exit 0
+      fi
+      if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        exit 0
+      fi
+      BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+      EXACT_TAG="$(git describe --tags --match "v[0-9]*" --exact-match 2>/dev/null || true)"
+      LATEST_TAG="$(git describe --tags --match "v[0-9]*" --abbrev=0 2>/dev/null || true)"
+      SHORT_SHA="$(git rev-parse --short HEAD 2>/dev/null || true)"
+      BUILD_VERSION=""
+      if [ -n "$EXACT_TAG" ]; then
+        BUILD_VERSION="$EXACT_TAG"
+      else
+        if [ -n "$LATEST_TAG" ]; then
+          BUILD_VERSION="$LATEST_TAG"
+        else
+          BUILD_VERSION="v0.0.0"
+        fi
+        if [ \( "$BRANCH_NAME" = "main" -o "$BRANCH_NAME" = "HEAD" \) ] && [ -n "$SHORT_SHA" ]; then
+          BUILD_VERSION="${BUILD_VERSION}-${SHORT_SHA}"
+        fi
+      fi
+      if [ -n "$BUILD_VERSION" ]; then
+        if [ -n "$(git status --porcelain)" ]; then
+          BUILD_VERSION="${BUILD_VERSION}-dev"
+        fi
+        if [ -n "$BRANCH_NAME" ] && [ "$BRANCH_NAME" != "HEAD" ] && [ "$BRANCH_NAME" != "main" ]; then
+          SAFE_BRANCH="$(echo "$BRANCH_NAME" | sed 's/[^A-Za-z0-9._-]/-/g')"
+          BUILD_VERSION="${BUILD_VERSION}-branch-${SAFE_BRANCH}"
+        fi
+      fi
+      echo "$BUILD_VERSION"
+
+tasks:
+  default:
+    cmds:
+      - task: build
+    desc: Build uploader release archives for Linux, Windows, and macOS.
+
+  clean:
+    deps: [clean:build, clean:cache]
+    desc: Remove uploader build artifacts and caches.
+
+  clean:build:
+    cmds:
+      - rm -rf dist
+    desc: Remove uploader build artifacts.
+
+  clean:cache:
+    cmds:
+      - rm -rf .tmp/go-build-cache .tmp/golangci-lint-cache .tmp/zig-cache
+    desc: Remove uploader local task/tool caches.
+
+  build:
+    cmds:
+      - |
+        set -euo pipefail
+        if ! command -v zip >/dev/null 2>&1; then
+          echo "'zip' command is required to package uploader archives." >&2
+          exit 1
+        fi
+      - rm -rf dist
+      - mkdir -p dist/bin/linux dist/bin/windows dist/bin/darwin
+      - |
+        set -euo pipefail
+        case "${UPLOADER_LINUX_TOOLCHAIN:-native}" in
+          native) task build:linux ;;
+          zig) task build:linux:zig ;;
+          *)
+            echo "Unsupported UPLOADER_LINUX_TOOLCHAIN='${UPLOADER_LINUX_TOOLCHAIN:-}' (expected: native|zig)." >&2
+            exit 1
+            ;;
+        esac
+      - task: build:windows
+      - task: build:darwin
+      - zip -j "dist/sentinel2-uploader-{{.BUILD_VERSION}}-linux-amd64.zip" "dist/bin/linux/{{.BIN_NAME}}"
+      - zip -j "dist/sentinel2-uploader-{{.BUILD_VERSION}}-windows-amd64.zip" "dist/bin/windows/{{.BIN_NAME}}.exe"
+      - zip -j "dist/sentinel2-uploader-{{.BUILD_VERSION}}-darwin-arm64.zip" "dist/bin/darwin/{{.BIN_NAME}}"
+    desc: Build versioned uploader archives.
+
+  build:linux:
+    cmds:
+      - mkdir -p dist/bin/linux
+      - GOOS=linux GOARCH=amd64 go build -ldflags "-X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/bin/linux/{{.BIN_NAME}}" .
+    desc: Build uploader Linux binary (amd64).
+
+  build:linux:zig:
+    deps: [ensure-deps:zig]
+    cmds:
+      - mkdir -p dist/bin/linux "{{.ZIG_CACHE_DEFAULT}}"
+      - |
+        ZIG_GLOBAL_CACHE_DIR="{{.ZIG_CACHE_DEFAULT}}" \
+        CC='zig cc -target x86_64-linux-gnu' \
+        CXX='zig c++ -target x86_64-linux-gnu' \
+        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+        go build -ldflags "-X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/bin/linux/{{.BIN_NAME}}" .
+    desc: Build uploader Linux binary (amd64) with Zig.
+
+  build:windows:
+    deps: [ensure-deps:zig]
+    cmds:
+      - mkdir -p dist/bin/windows "{{.ZIG_CACHE_DEFAULT}}"
+      - |
+        ZIG_GLOBAL_CACHE_DIR="{{.ZIG_CACHE_DEFAULT}}" \
+        CC='zig cc -target x86_64-windows-gnu' \
+        CXX='zig c++ -target x86_64-windows-gnu' \
+        CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
+        go build -ldflags "-H windowsgui -X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/bin/windows/{{.BIN_NAME}}.exe" .
+    desc: Build uploader Windows binary (amd64).
+
+  build:darwin:
+    cmds:
+      - mkdir -p dist/bin/darwin
+      - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags headless -ldflags "-X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/bin/darwin/{{.BIN_NAME}}" .
+    desc: Build uploader macOS binary (arm64, headless).
+
+  run:
+    deps: [run:auto]
+    desc: Run uploader for the current host platform.
+
+  run:headless:
+    deps: [run:auto:headless]
+    desc: Run uploader for the current host platform with --headless.
+
+  run:auto:
+    aliases: [run:detect]
+    cmds:
+      - |
+        set -euo pipefail
+        UNAME_S="$(uname -s 2>/dev/null || true)"
+        case "$UNAME_S" in
+          Linux) task run:linux ;;
+          Darwin) task run:darwin ;;
+          MINGW*|MSYS*|CYGWIN*) task run:windows ;;
+          *)
+            if [ "${OS:-}" = "Windows_NT" ]; then
+              task run:windows
+            else
+              echo "Unsupported host OS for 'task run'. Use run:linux|run:darwin|run:windows explicitly." >&2
+              exit 1
+            fi
+            ;;
+        esac
+    desc: Detect host OS and run uploader.
+
+  run:auto:headless:
+    aliases: [run:detect:headless]
+    cmds:
+      - |
+        set -euo pipefail
+        UNAME_S="$(uname -s 2>/dev/null || true)"
+        case "$UNAME_S" in
+          Linux) task run:linux:headless ;;
+          Darwin) task run:darwin:headless ;;
+          MINGW*|MSYS*|CYGWIN*) task run:windows:headless ;;
+          *)
+            if [ "${OS:-}" = "Windows_NT" ]; then
+              task run:windows:headless
+            else
+              echo "Unsupported host OS for 'task run:headless'. Use run:<platform>:headless explicitly." >&2
+              exit 1
+            fi
+            ;;
+        esac
+    desc: Detect host OS and run uploader with --headless.
+
+  build:run:
+    cmds:
+      - |
+        set -euo pipefail
+        case "$(uname -s)" in
+          Linux) task build:linux:run ;;
+          Darwin) task build:darwin:run ;;
+          *) echo "Unsupported host OS for 'task build:run'. Use build:<platform>:run explicitly." >&2; exit 1 ;;
+        esac
+    desc: Build and run uploader for the current host platform.
+
+  build:run:headless:
+    cmds:
+      - |
+        set -euo pipefail
+        case "$(uname -s)" in
+          Linux) task build:linux:run:headless ;;
+          Darwin) task build:darwin:run:headless ;;
+          *) echo "Unsupported host OS for 'task build:run:headless'. Use build:<platform>:run:headless explicitly." >&2; exit 1 ;;
+        esac
+    desc: Build and run uploader for the current host platform with --headless.
+
+  run:linux:
+    cmds:
+      - ./dist/bin/linux/{{.BIN_NAME}}
+    desc: Run uploader Linux binary.
+
+  run:linux:headless:
+    cmds:
+      - ./dist/bin/linux/{{.BIN_NAME}} --headless
+    desc: Run uploader Linux binary with --headless.
+
+  run:darwin:
+    cmds:
+      - ./dist/bin/darwin/{{.BIN_NAME}}
+    desc: Run uploader macOS binary.
+
+  run:darwin:headless:
+    cmds:
+      - ./dist/bin/darwin/{{.BIN_NAME}} --headless
+    desc: Run uploader macOS binary with --headless.
+
+  run:windows:
+    cmds:
+      - ./dist/bin/windows/{{.BIN_NAME}}.exe
+    desc: Run uploader Windows binary.
+
+  run:windows:headless:
+    cmds:
+      - ./dist/bin/windows/{{.BIN_NAME}}.exe --headless
+    desc: Run uploader Windows binary with --headless.
+
+  build:linux:run:
+    deps: [build:linux]
+    cmds:
+      - task: run:linux
+    desc: Build and run uploader Linux binary.
+
+  build:linux:run:headless:
+    deps: [build:linux]
+    cmds:
+      - task: run:linux:headless
+    desc: Build and run uploader Linux binary with --headless.
+
+  build:darwin:run:
+    deps: [build:darwin]
+    cmds:
+      - task: run:darwin
+    desc: Build and run uploader macOS binary.
+
+  build:darwin:run:headless:
+    deps: [build:darwin]
+    cmds:
+      - task: run:darwin:headless
+    desc: Build and run uploader macOS binary with --headless.
+
+  build:windows:run:
+    deps: [build:windows]
+    cmds:
+      - task: run:windows
+    desc: Build and run uploader Windows binary.
+
+  build:windows:run:headless:
+    deps: [build:windows]
+    cmds:
+      - task: run:windows:headless
+    desc: Build and run uploader Windows binary with --headless.
+
+  lint:go:
+    cmds:
+      - |
+        set -euo pipefail
+        if ! command -v golangci-lint >/dev/null 2>&1; then
+          echo "golangci-lint is not installed. See README for install steps." >&2
+          exit 1
+        fi
+        if ! golangci-lint version 2>/dev/null | grep -qE 'version v?2\.'; then
+          echo "golangci-lint v2 is required for this repo (.golangci.yml version: 2)." >&2
+          echo "Install/upgrade with:" >&2
+          echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest" >&2
+          exit 1
+        fi
+        mkdir -p "{{.GOLANGCI_LINT_CACHE_DEFAULT}}" "{{.GO_BUILD_CACHE_DEFAULT}}"
+        GOCACHE="{{.GO_BUILD_CACHE_DEFAULT}}" GOLANGCI_LINT_CACHE="{{.GOLANGCI_LINT_CACHE_DEFAULT}}" golangci-lint run ./...
+    desc: Run uploader Go lint.
+
+  ensure-deps:zig:
+    cmds:
+      - |
+        set -euo pipefail
+        if ! command -v zig >/dev/null 2>&1; then
+          echo "zig is required for uploader cross-build tasks." >&2
+          echo "Install zig from https://ziglang.org/download/" >&2
+          exit 1
+        fi
+        zig version
+    desc: Ensure zig is installed.

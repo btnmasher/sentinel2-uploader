@@ -1,0 +1,61 @@
+name: Uploader Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Task
+        uses: go-task/setup-task@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.14.1"
+
+      - name: Restore Go cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ${{ github.workspace }}/.tmp/go-build-cache
+          key: ${{ runner.os }}-go-uploader-release-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-uploader-release-
+
+      - name: Restore Zig cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.tmp/zig-cache
+          key: ${{ runner.os }}-zig-uploader-release-${{ hashFiles('go.sum', 'Taskfile.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-uploader-release-
+
+      - name: Build release archives
+        run: task build
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
