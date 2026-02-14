@@ -57,9 +57,9 @@ jobs:
             ~/go/pkg/mod
             ${{ github.workspace }}/.tmp/go-build-cache
             ${{ github.workspace }}/.tmp/golangci-lint-cache
-          key: ${{ runner.os }}-go-uploader-lint-${{ hashFiles('go.sum', '.golangci-lint-version') }}
+          key: ${{ runner.os }}-go-uploader-${{ hashFiles('go.sum', '.golangci-lint-version') }}
           restore-keys: |
-            ${{ runner.os }}-go-uploader-lint-
+            ${{ runner.os }}-go-uploader-
 
       - name: Install golangci-lint
         run: |
@@ -98,9 +98,10 @@ jobs:
           path: |
             ~/go/pkg/mod
             ${{ github.workspace }}/.tmp/go-build-cache
-          key: ${{ runner.os }}-go-uploader-test-${{ hashFiles('go.sum') }}
+            ${{ github.workspace }}/.tmp/golangci-lint-cache
+          key: ${{ runner.os }}-go-uploader-${{ hashFiles('go.sum', '.golangci-lint-version') }}
           restore-keys: |
-            ${{ runner.os }}-go-uploader-test-
+            ${{ runner.os }}-go-uploader-
 
       - name: Test uploader
         run: task test:go
