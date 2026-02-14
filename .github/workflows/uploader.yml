@@ -27,8 +27,8 @@ permissions:
   contents: read
 
 jobs:
-  lint-test:
-    name: Uploader lint + test
+  lint:
+    name: Uploader lint
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -68,6 +68,39 @@ jobs:
 
       - name: Lint uploader
         run: task lint:go
+
+  test:
+    name: Uploader test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Task
+        uses: go-task/setup-task@v1
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install Linux GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev
+
+      - name: Restore Go cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ${{ github.workspace }}/.tmp/go-build-cache
+          key: ${{ runner.os }}-go-uploader-test-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-uploader-test-
 
       - name: Test uploader
         run: task test:go
