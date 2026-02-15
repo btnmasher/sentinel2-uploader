@@ -34,6 +34,8 @@ type startResultMsg struct {
 	err error
 }
 
+type quitNowMsg struct{}
+
 type statusKind int
 
 const (
@@ -61,6 +63,7 @@ type modelChannels struct {
 type modelRuntime struct {
 	running    bool
 	connecting bool
+	quitting   bool
 	status     string
 	kind       statusKind
 

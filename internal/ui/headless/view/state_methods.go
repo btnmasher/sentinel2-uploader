@@ -2,7 +2,10 @@ package view
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"sentinel2-uploader/internal/ui/headless/theme"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -33,9 +36,7 @@ const (
 )
 
 const (
-	minContentWidth          = 40
-	minPageWidth             = 24
-	pageFrameHorizontalInset = 4
+	minPageWidth = 24
 )
 
 const (
@@ -81,11 +82,17 @@ func (s State) CancelIndex() int      { return len(s.Inputs) + logsDebugControlI
 func (s State) ConnectIndex() int     { return connectControlIndex }
 
 func (s State) ContentWidth() int {
-	return max(s.Width, minContentWidth)
+	width := max(s.Width, 1)
+	// Some Windows terminals wrap when a styled line lands exactly on the
+	// reported last column; keep one-column headroom to avoid right-edge drift.
+	if runtime.GOOS == "windows" && width > 1 {
+		width--
+	}
+	return width
 }
 
 func (s State) PageWidth() int {
-	return max(s.ContentWidth()-pageFrameHorizontalInset, minPageWidth)
+	return max(s.ContentWidth()-theme.PanelStyle.GetHorizontalFrameSize(), minPageWidth)
 }
 
 func (s State) LogPanelHeight(nonLogLayoutReserveMin int, minLogPanelHeight int) int {

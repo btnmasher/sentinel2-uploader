@@ -1,10 +1,12 @@
 package view
 
 import (
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	zone "github.com/lrstanley/bubblezone"
 
 	"sentinel2-uploader/internal/ui/headless/health"
 	"sentinel2-uploader/internal/ui/headless/theme"
@@ -23,15 +25,26 @@ const (
 	scrollbarMinThumb = 0
 )
 
-func RenderTabs(isOverview bool) string {
-	overview := theme.TabInactiveStyle.Render("Overview")
-	settings := theme.TabInactiveStyle.Render("Settings")
-	if isOverview {
-		overview = theme.TabActiveStyle.Render("Overview")
-	} else {
-		settings = theme.TabActiveStyle.Render("Settings")
+func RenderTabs(activeTab int, hoverZone string) string {
+	overview := theme.TabInactiveStyle.Render(" Overview ")
+	settings := theme.TabInactiveStyle.Render(" Settings ")
+	if hoverZone == zoneTabOverview {
+		overview = theme.TabHoverStyle.Render(" Overview ")
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Left, overview, " ", settings)
+	if hoverZone == zoneTabSettings {
+		settings = theme.TabHoverStyle.Render(" Settings ")
+	}
+	if activeTab == TabOverview {
+		overview = theme.TabActiveStyle.Render(" Overview ")
+	}
+	if activeTab == TabSettings {
+		settings = theme.TabActiveStyle.Render(" Settings ")
+	}
+
+	overview = zone.Mark(zoneTabOverview, overview)
+	settings = zone.Mark(zoneTabSettings, settings)
+
+	return lipgloss.JoinHorizontal(lipgloss.Bottom, overview, settings)
 }
 
 func RenderStatus(status string, kind int) string {
@@ -107,6 +120,27 @@ func RainbowText(value string, phase int) string {
 		b.WriteString(style.Render(string(r)))
 	}
 	return b.String()
+}
+
+func RainbowTitle(value string, phase int, animated bool) string {
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return value
+	}
+	parts := make([]string, 0, len(runes))
+	span := theme.RainbowSpan()
+	phaseF := float64(phase)
+	for i := range runes {
+		t := float64(i) / float64(max(len(runes)-1, 1))
+		x := t * span
+		if animated {
+			// Smooth visible wave: a global drift plus a per-character sinusoidal ripple.
+			x += -phaseF*0.14 + math.Sin((float64(i)*0.42)+(phaseF*0.12))*0.85
+		}
+		color := theme.RainbowColorAt(x)
+		parts = append(parts, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(color)).Render(string(runes[i])))
+	}
+	return strings.Join(parts, "")
 }
 
 func WithScrollBar(content string, width int, height int, percent float64) string {

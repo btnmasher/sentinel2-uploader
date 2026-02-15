@@ -2,6 +2,7 @@ package render
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -10,42 +11,72 @@ import (
 )
 
 func Frame(content string, width int, rainbow bool, phase int, panelStyle lipgloss.Style) string {
+	innerWidth := width - panelStyle.GetHorizontalFrameSize()
+	innerWidth = max(innerWidth, 1)
+	framed := panelStyle.Width(innerWidth).Render(content)
 	if !rainbow {
-		innerWidth := width - 4 // rounded border (2) + horizontal padding (2)
-		innerWidth = max(innerWidth, 1)
-		return panelStyle.Width(innerWidth).Render(content)
+		return framed
 	}
-	return rainbowFrame(content, width, phase)
+	return rainbowizeFrameBorders(framed, phase)
 }
 
-func rainbowFrame(content string, width int, phase int) string {
-	lines := strings.Split(content, "\n")
-	innerWidth := width - 2
-	innerWidth = max(innerWidth, 20)
-	clamp := lipgloss.NewStyle().MaxWidth(innerWidth).Width(innerWidth)
-
-	top := colorizeBorderLine("╭", "─", "╮", innerWidth, 0, phase)
-	bottom := colorizeBorderLine("╰", "─", "╯", innerWidth, len(lines)+1, phase)
-	framed := make([]string, 0, len(lines)+2)
-	framed = append(framed, top)
-	for i, line := range lines {
-		padded := clamp.Render(line)
-		left := colorizeBorderChar("│", 0, i+1, phase)
-		right := colorizeBorderChar("│", innerWidth+1, i+1, phase)
-		framed = append(framed, left+padded+right)
+func rainbowizeFrameBorders(framed string, phase int) string {
+	lines := strings.Split(framed, "\n")
+	if len(lines) == 0 {
+		return framed
 	}
-	framed = append(framed, bottom)
-	return strings.Join(framed, "\n")
+	out := make([]string, len(lines))
+	last := len(lines) - 1
+	for y, line := range lines {
+		switch {
+		case y == 0 || y == last:
+			out[y] = colorizeHorizontalBorder(line, y, phase)
+		default:
+			out[y] = colorizeVerticalEdges(line, y, phase)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
-func colorizeBorderLine(left, fill, right string, width int, y int, phase int) string {
+func colorizeHorizontalBorder(line string, y int, phase int) string {
 	var b strings.Builder
-	b.WriteString(colorizeBorderChar(left, 0, y, phase))
-	for x := 1; x <= width; x++ {
-		b.WriteString(colorizeBorderChar(fill, x, y, phase))
+	x := 0
+	for _, r := range line {
+		ch := string(r)
+		if isFrameBorderRune(r) {
+			ch = colorizeBorderChar(ch, x, y, phase)
+		}
+		b.WriteString(ch)
+		x++
 	}
-	b.WriteString(colorizeBorderChar(right, width+1, y, phase))
 	return b.String()
+}
+
+func colorizeVerticalEdges(line string, y int, phase int) string {
+	if line == "" {
+		return line
+	}
+	leftRune, leftSize := utf8.DecodeRuneInString(line)
+	if leftRune != '│' {
+		return line
+	}
+	rightIdx := strings.LastIndex(line, "│")
+	if rightIdx <= 0 {
+		return line
+	}
+	rightX := ansi.StringWidth(line[:rightIdx])
+	leftColored := colorizeBorderChar("│", 0, y, phase)
+	rightColored := colorizeBorderChar("│", rightX, y, phase)
+	return leftColored + line[leftSize:rightIdx] + rightColored
+}
+
+func isFrameBorderRune(r rune) bool {
+	switch r {
+	case '╭', '╮', '╰', '╯', '─', '│':
+		return true
+	default:
+		return false
+	}
 }
 
 func colorizeBorderChar(ch string, x int, y int, phase int) string {

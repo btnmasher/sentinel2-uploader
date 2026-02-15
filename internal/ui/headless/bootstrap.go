@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	zone "github.com/lrstanley/bubblezone"
 
 	"sentinel2-uploader/internal/client"
 	"sentinel2-uploader/internal/config"
@@ -24,6 +25,8 @@ const (
 )
 
 func Run(rootCtx context.Context, buildVersion string, opts config.Options) {
+	defer forceDisableMouseTracking()
+
 	if saved, loadErr := config.LoadSettings(); loadErr == nil {
 		opts = config.MergeOptionsWithSettings(opts, saved)
 	}
@@ -37,7 +40,8 @@ func Run(rootCtx context.Context, buildVersion string, opts config.Options) {
 	logger.Info("starting uploader TUI", logging.Field("version", buildVersion))
 
 	m := newHeadlessModel(rootCtx, buildVersion, opts, logger)
-	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	zone.NewGlobal()
+	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	m.program = program
 	result, runErr := program.Run()
 	model, _ := result.(*headlessModel)
@@ -48,6 +52,10 @@ func Run(rootCtx context.Context, buildVersion string, opts config.Options) {
 		fmt.Fprintln(os.Stderr, runErr)
 		os.Exit(runErrorExitCode)
 	}
+}
+
+func forceDisableMouseTracking() {
+	_, _ = os.Stdout.WriteString("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l")
 }
 
 func newHeadlessModel(rootCtx context.Context, buildVersion string, opts config.Options, logger *logging.Logger) *headlessModel {

@@ -72,7 +72,7 @@ tasks:
           exit 1
         fi
       - rm -rf dist
-      - mkdir -p dist/bin/linux dist/bin/windows dist/bin/darwin
+      - mkdir -p dist/linux dist/windows dist/darwin
       - |
         set -euo pipefail
         case "${UPLOADER_LINUX_TOOLCHAIN:-native}" in
@@ -85,53 +85,69 @@ tasks:
         esac
       - task: build:windows
       - task: build:darwin
-      - zip -j "dist/sentinel2-uploader-{{.BUILD_VERSION}}-linux-amd64.zip" "dist/bin/linux/{{.BIN_NAME}}"
-      - zip -j "dist/sentinel2-uploader-{{.BUILD_VERSION}}-windows-amd64.zip" "dist/bin/windows/{{.BIN_NAME}}.exe"
-      - zip -j "dist/sentinel2-uploader-{{.BUILD_VERSION}}-darwin-arm64.zip" "dist/bin/darwin/{{.BIN_NAME}}"
+      - zip -j "dist/sentinel2-uploader-{{.BUILD_VERSION}}-linux-amd64.zip" "dist/linux/{{.BIN_NAME}}"
+      - zip -j "dist/sentinel2-uploader-{{.BUILD_VERSION}}-windows-amd64.zip" "dist/windows/{{.BIN_NAME}}.exe"
+      - zip -j "dist/sentinel2-uploader-{{.BUILD_VERSION}}-darwin-arm64.zip" "dist/darwin/{{.BIN_NAME}}"
     desc: Build versioned uploader archives.
 
   build:linux:
     cmds:
-      - mkdir -p dist/bin/linux
-      - GOOS=linux GOARCH=amd64 go build -ldflags "-X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/bin/linux/{{.BIN_NAME}}" .
+      - mkdir -p dist/linux
+      - GOOS=linux GOARCH=amd64 go build -ldflags "-X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/linux/{{.BIN_NAME}}" .
     desc: Build uploader Linux binary (amd64).
 
   build:linux:zig:
     deps: [ensure-deps:zig]
     cmds:
-      - mkdir -p dist/bin/linux "{{.ZIG_CACHE_DEFAULT}}"
+      - mkdir -p dist/linux "{{.ZIG_CACHE_DEFAULT}}"
       - |
         ZIG_GLOBAL_CACHE_DIR="{{.ZIG_CACHE_DEFAULT}}" \
         CC='zig cc -target x86_64-linux-gnu' \
         CXX='zig c++ -target x86_64-linux-gnu' \
         CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-        go build -ldflags "-X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/bin/linux/{{.BIN_NAME}}" .
+        go build -ldflags "-X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/linux/{{.BIN_NAME}}" .
     desc: Build uploader Linux binary (amd64) with Zig.
 
   build:windows:
     deps: [ensure-deps:zig]
     cmds:
-      - mkdir -p dist/bin/windows "{{.ZIG_CACHE_DEFAULT}}"
+      - mkdir -p dist/windows "{{.ZIG_CACHE_DEFAULT}}"
       - |
+        set -euo pipefail
+        LDFLAGS="-X main.BuildVersion={{.BUILD_VERSION}}"
         ZIG_GLOBAL_CACHE_DIR="{{.ZIG_CACHE_DEFAULT}}" \
         CC='zig cc -target x86_64-windows-gnu' \
         CXX='zig c++ -target x86_64-windows-gnu' \
         CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
-        go build -ldflags "-H windowsgui -X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/bin/windows/{{.BIN_NAME}}.exe" .
+        go build -ldflags "$LDFLAGS" -o "dist/windows/{{.BIN_NAME}}.exe" .
     desc: Build uploader Windows binary (amd64).
 
   build:darwin:
     cmds:
-      - mkdir -p dist/bin/darwin
-      - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags headless -ldflags "-X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/bin/darwin/{{.BIN_NAME}}" .
+      - mkdir -p dist/darwin
+      - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags headless -ldflags "-X main.BuildVersion={{.BUILD_VERSION}}" -o "dist/darwin/{{.BIN_NAME}}" .
     desc: Build uploader macOS binary (arm64, headless).
 
   run:
-    deps: [run:auto]
+    cmds:
+      - |
+        set -euo pipefail
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          task run:auto -- {{.CLI_ARGS}}
+        else
+          task run:auto
+        fi
     desc: Run uploader for the current host platform.
 
   run:headless:
-    deps: [run:auto:headless]
+    cmds:
+      - |
+        set -euo pipefail
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          task run:auto:headless -- {{.CLI_ARGS}}
+        else
+          task run:auto:headless
+        fi
     desc: Run uploader for the current host platform with --headless.
 
   run:auto:
@@ -139,14 +155,22 @@ tasks:
     cmds:
       - |
         set -euo pipefail
+        run_target_with_args() {
+          target="$1"
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            task "$target" -- {{.CLI_ARGS}}
+          else
+            task "$target"
+          fi
+        }
         UNAME_S="$(uname -s 2>/dev/null || true)"
         case "$UNAME_S" in
-          Linux) task run:linux ;;
-          Darwin) task run:darwin ;;
-          MINGW*|MSYS*|CYGWIN*) task run:windows ;;
+          Linux) run_target_with_args run:linux ;;
+          Darwin) run_target_with_args run:darwin ;;
+          MINGW*|MSYS*|CYGWIN*) run_target_with_args run:windows ;;
           *)
             if [ "${OS:-}" = "Windows_NT" ]; then
-              task run:windows
+              run_target_with_args run:windows
             else
               echo "Unsupported host OS for 'task run'. Use run:linux|run:darwin|run:windows explicitly." >&2
               exit 1
@@ -160,14 +184,22 @@ tasks:
     cmds:
       - |
         set -euo pipefail
+        run_target_with_args() {
+          target="$1"
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            task "$target" -- {{.CLI_ARGS}}
+          else
+            task "$target"
+          fi
+        }
         UNAME_S="$(uname -s 2>/dev/null || true)"
         case "$UNAME_S" in
-          Linux) task run:linux:headless ;;
-          Darwin) task run:darwin:headless ;;
-          MINGW*|MSYS*|CYGWIN*) task run:windows:headless ;;
+          Linux) run_target_with_args run:linux:headless ;;
+          Darwin) run_target_with_args run:darwin:headless ;;
+          MINGW*|MSYS*|CYGWIN*) run_target_with_args run:windows:headless ;;
           *)
             if [ "${OS:-}" = "Windows_NT" ]; then
-              task run:windows:headless
+              run_target_with_args run:windows:headless
             else
               echo "Unsupported host OS for 'task run:headless'. Use run:<platform>:headless explicitly." >&2
               exit 1
@@ -180,9 +212,17 @@ tasks:
     cmds:
       - |
         set -euo pipefail
+        run_target_with_args() {
+          target="$1"
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            task "$target" -- {{.CLI_ARGS}}
+          else
+            task "$target"
+          fi
+        }
         case "$(uname -s)" in
-          Linux) task build:linux:run ;;
-          Darwin) task build:darwin:run ;;
+          Linux) run_target_with_args build:linux:run ;;
+          Darwin) run_target_with_args build:darwin:run ;;
           *) echo "Unsupported host OS for 'task build:run'. Use build:<platform>:run explicitly." >&2; exit 1 ;;
         esac
     desc: Build and run uploader for the current host platform.
@@ -191,77 +231,91 @@ tasks:
     cmds:
       - |
         set -euo pipefail
+        run_target_with_args() {
+          target="$1"
+          if [ -n "{{.CLI_ARGS}}" ]; then
+            task "$target" -- {{.CLI_ARGS}}
+          else
+            task "$target"
+          fi
+        }
         case "$(uname -s)" in
-          Linux) task build:linux:run:headless ;;
-          Darwin) task build:darwin:run:headless ;;
+          Linux) run_target_with_args build:linux:run:headless ;;
+          Darwin) run_target_with_args build:darwin:run:headless ;;
           *) echo "Unsupported host OS for 'task build:run:headless'. Use build:<platform>:run:headless explicitly." >&2; exit 1 ;;
         esac
     desc: Build and run uploader for the current host platform with --headless.
 
   run:linux:
     cmds:
-      - ./dist/bin/linux/{{.BIN_NAME}}
+      - ./dist/linux/{{.BIN_NAME}} {{.CLI_ARGS}}
     desc: Run uploader Linux binary.
 
   run:linux:headless:
     cmds:
-      - ./dist/bin/linux/{{.BIN_NAME}} --headless
+      - ./dist/linux/{{.BIN_NAME}} --headless {{.CLI_ARGS}}
     desc: Run uploader Linux binary with --headless.
 
   run:darwin:
     cmds:
-      - ./dist/bin/darwin/{{.BIN_NAME}}
+      - ./dist/darwin/{{.BIN_NAME}} {{.CLI_ARGS}}
     desc: Run uploader macOS binary.
 
   run:darwin:headless:
     cmds:
-      - ./dist/bin/darwin/{{.BIN_NAME}} --headless
+      - ./dist/darwin/{{.BIN_NAME}} --headless {{.CLI_ARGS}}
     desc: Run uploader macOS binary with --headless.
 
   run:windows:
     cmds:
-      - ./dist/bin/windows/{{.BIN_NAME}}.exe
+      - ./dist/windows/{{.BIN_NAME}}.exe {{.CLI_ARGS}}
     desc: Run uploader Windows binary.
 
   run:windows:headless:
     cmds:
-      - ./dist/bin/windows/{{.BIN_NAME}}.exe --headless
+      - ./dist/windows/{{.BIN_NAME}}.exe --headless {{.CLI_ARGS}}
     desc: Run uploader Windows binary with --headless.
 
   build:linux:run:
     deps: [build:linux]
     cmds:
       - task: run:linux
+        vars: { CLI_ARGS: "{{.CLI_ARGS}}" }
     desc: Build and run uploader Linux binary.
 
   build:linux:run:headless:
     deps: [build:linux]
     cmds:
       - task: run:linux:headless
+        vars: { CLI_ARGS: "{{.CLI_ARGS}}" }
     desc: Build and run uploader Linux binary with --headless.
 
   build:darwin:run:
     deps: [build:darwin]
     cmds:
       - task: run:darwin
+        vars: { CLI_ARGS: "{{.CLI_ARGS}}" }
     desc: Build and run uploader macOS binary.
 
   build:darwin:run:headless:
     deps: [build:darwin]
     cmds:
       - task: run:darwin:headless
+        vars: { CLI_ARGS: "{{.CLI_ARGS}}" }
     desc: Build and run uploader macOS binary with --headless.
 
   build:windows:run:
     deps: [build:windows]
     cmds:
       - task: run:windows
+        vars: { CLI_ARGS: "{{.CLI_ARGS}}" }
     desc: Build and run uploader Windows binary.
 
   build:windows:run:headless:
     deps: [build:windows]
     cmds:
       - task: run:windows:headless
+        vars: { CLI_ARGS: "{{.CLI_ARGS}}" }
     desc: Build and run uploader Windows binary with --headless.
 
   lint:go:

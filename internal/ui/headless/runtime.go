@@ -13,8 +13,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const runtimeStopTimeout = 3 * time.Second
-
 func (m *headlessModel) currentOptions() config.Options {
 	return config.Options{
 		BaseURL:     strings.TrimSpace(m.ui.Inputs[0].Value()),
@@ -158,11 +156,8 @@ func (m *headlessModel) cleanup() {
 		}
 
 		m.logger.Debug("stopping runtime controller")
-		if ok := m.runner.StopAndWait(runtimeStopTimeout); !ok {
-			m.logger.Warn("runtime controller did not stop within timeout")
-		} else {
-			m.logger.Debug("runtime controller stopped")
-		}
+		m.runner.Stop()
+		m.logger.Debug("runtime controller stop requested")
 
 		m.logger.Debug("headless cleanup complete")
 	})

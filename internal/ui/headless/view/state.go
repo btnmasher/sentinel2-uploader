@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/lipgloss"
 
 	"sentinel2-uploader/internal/config"
 	"sentinel2-uploader/internal/ui/headless/keyboard"
@@ -60,6 +61,7 @@ type State struct {
 	ErrorModalText    string
 	FilePickerOpen    bool
 	FilePicker        filepicker.Model
+	HoverZone         string
 
 	SavedSettings config.UploaderSettings
 	DraftSettings config.UploaderSettings
@@ -71,6 +73,7 @@ func NewState(opts config.Options, defaultLogDir string) State {
 		inputs[i] = textinput.New()
 		inputs[i].CharLimit = defaultInputCharLimit
 		inputs[i].Width = defaultInputWidth
+		inputs[i].Prompt = ""
 	}
 	inputs[baseURLInputIndex].Placeholder = "https://intel.example.com"
 	inputs[baseURLInputIndex].SetValue(strings.TrimSpace(opts.BaseURL))
@@ -92,10 +95,18 @@ func NewState(opts config.Options, defaultLogDir string) State {
 	picker.KeyMap.Select = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select"))
 
 	saved := config.SettingsFromOptions(opts)
+	helpView := help.New()
+	helpView.Styles.ShortKey = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
+	helpView.Styles.FullKey = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true)
+	helpView.Styles.ShortDesc = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	helpView.Styles.FullDesc = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	helpView.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	helpView.Styles.FullSeparator = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	helpView.Styles.Ellipsis = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	return State{
 		Inputs:        inputs,
 		Tab:           defaultTab,
-		HelpView:      help.New(),
+		HelpView:      helpView,
 		Keys:          keyboard.New(),
 		AutoConn:      opts.AutoConnect,
 		DebugOn:       opts.Debug,

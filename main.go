@@ -41,5 +41,6 @@ func main() {
 		headless.Run(rootCtx, BuildVersion, opts)
 		return
 	}
+	hideAndDetachConsoleForGUI()
 	gui.Run(rootCtx, BuildVersion, opts)
 }

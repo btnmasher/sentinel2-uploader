@@ -4,18 +4,26 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"sentinel2-uploader/internal/client"
 	"sentinel2-uploader/internal/config"
 	"sentinel2-uploader/internal/logging"
 	"sentinel2-uploader/internal/ui/headless/health"
 	headlessview "sentinel2-uploader/internal/ui/headless/view"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *headlessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.quitting {
+		if _, ok := msg.(quitNowMsg); ok {
+			m.cleanup()
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
 	if m.ui.FilePickerOpen {
 		if ws, ok := msg.(tea.WindowSizeMsg); ok {
 			m.ui = m.ui.WithWindowSize(ws.Width, ws.Height)
@@ -98,8 +106,14 @@ func (m *headlessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *headlessModel) updateMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	next, cmd := headlessview.ReduceMouse(m.ui, msg)
+	next, cmd, effect := headlessview.ReduceMouse(m.ui, msg)
 	m.ui = next
+	switch effect {
+	case headlessview.MouseEffectActivateFocused:
+		return m, tea.Batch(cmd, m.activateFocusedControl())
+	case headlessview.MouseEffectConfirmQuitAccept:
+		return m, tea.Batch(cmd, m.beginQuitCmd())
+	}
 	return m, cmd
 }
 
@@ -114,8 +128,7 @@ func (m *headlessModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case headlessview.KeyEffectActivateFocused:
 		return m, m.activateFocusedControl()
 	case headlessview.KeyEffectConfirmQuitAccept:
-		m.cleanup()
-		return m, tea.Quit
+		return m, m.beginQuitCmd()
 	default:
 		return m, nil
 	}
@@ -174,8 +187,28 @@ func (m *headlessModel) requestQuitCmd() tea.Cmd {
 		m.ui.ConfirmQuitChoice = headlessview.ConfirmQuitChoiceCancel
 		return nil
 	}
-	m.cleanup()
-	return tea.Quit
+	return m.beginQuitCmd()
+}
+
+func quitProgramCmd() tea.Cmd {
+	return tea.Sequence(func() tea.Msg {
+		return tea.DisableMouse()
+	}, waitForMouseDrainCmd(), func() tea.Msg {
+		return quitNowMsg{}
+	})
+}
+
+func waitForMouseDrainCmd() tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(120 * time.Millisecond)
+		return nil
+	}
+}
+
+func (m *headlessModel) beginQuitCmd() tea.Cmd {
+	m.quitting = true
+	m.ui.ConfirmQuit = false
+	return quitProgramCmd()
 }
 
 func (m *headlessModel) updateFilePickerMsg(msg tea.Msg) (tea.Model, tea.Cmd) {

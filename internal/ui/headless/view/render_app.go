@@ -1,11 +1,12 @@
 package view
 
 import (
-	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	zone "github.com/lrstanley/bubblezone"
 
 	"sentinel2-uploader/internal/ui/headless/health"
 	"sentinel2-uploader/internal/ui/headless/render"
@@ -48,8 +49,10 @@ const (
 	defaultOverviewPaneHeight  = 8
 	largeOverviewPaneHeight    = 10
 	largeOverviewHeightCutover = 36
-	settingsHeightPadding      = 4
-	settingsPaneMinHeight      = 12
+	settingsHeightPadding      = 8
+	settingsPaneMinHeight      = 16
+	settingsLabelGap           = 1
+	settingsRightEdgeGuard     = 1
 )
 
 func RenderApp(state *State, rt Runtime) string {
@@ -59,23 +62,23 @@ func RenderApp(state *State, rt Runtime) string {
 
 	base := renderBase(state, rt)
 	if state.FilePickerOpen {
-		return renderModalOverlay(state, base, renderFilePickerDialog(state))
+		return zone.Scan(renderModalOverlay(state, base, renderFilePickerDialog(state)))
 	}
 
 	if state.ErrorModalText != "" {
-		return renderModalOverlay(state, base, renderErrorDialog(state))
+		return zone.Scan(renderModalOverlay(state, base, renderErrorDialog(state)))
 	}
 
 	if state.ConfirmQuit {
-		return renderModalOverlay(state, base, renderQuitConfirmDialog(state))
+		return zone.Scan(renderModalOverlay(state, base, renderQuitConfirmDialog(state)))
 	}
 
-	return base
+	return zone.Scan(base)
 }
 
 func renderBase(state *State, rt Runtime) string {
-	header := theme.TitleStyle.Render("Sentinel2 Uploader (" + rt.BuildVersion + ")")
-	tabs := RenderTabs(state.Tab == TabOverview)
+	header := RainbowTitle("Sentinel2 Uploader ("+rt.BuildVersion+")", state.AnimPhase, state.ImGay)
+	tabs := RenderTabs(state.Tab, state.HoverZone)
 
 	var content string
 	if state.Tab == TabOverview {
@@ -84,12 +87,26 @@ func renderBase(state *State, rt Runtime) string {
 		content = renderSettings(state)
 	}
 
+	helpWidth := max(state.PageWidth()-frameInnerInset, minPageWidth)
+	state.HelpView.Width = helpWidth
 	helpText := state.HelpView.View(state.Keys)
-	if state.Tab == TabSettings {
-		helpText += " • ctrl+s save"
+	hints := []string{
+		renderHelpHint("mouse click", "focus/activate"),
 	}
+	if state.Tab == TabSettings {
+		hints = append([]string{renderHelpHint("ctrl+s", "save")}, hints...)
+	}
+	if len(hints) > 0 {
+		if strings.TrimSpace(helpText) != "" {
+			helpText += " " + theme.HelpStyle.Render("•") + " " + strings.Join(hints, " "+theme.HelpStyle.Render("•")+" ")
+		} else {
+			helpText = strings.Join(hints, " "+theme.HelpStyle.Render("•")+" ")
+		}
+	}
+	helpText = ansi.Wrap(helpText, helpWidth, "")
 
-	sections := []string{header, tabs, content}
+	top := strings.Join([]string{header, tabs, content}, "\n")
+	sections := []string{top}
 
 	if state.Tab == TabOverview && state.ShowLogs {
 		state.FitLogViewportHeight([]string{header, tabs, content, helpText}, DefaultNonLogLayoutReserveMin, DefaultMinLogPanelHeight)
@@ -98,12 +115,18 @@ func renderBase(state *State, rt Runtime) string {
 	}
 
 	sections = append(sections, theme.HelpStyle.Render(helpText))
-	root := strings.Join(sections, "\n\n")
+	root := strings.Join(sections, "\n")
 	return renderFrame(state, root, state.ContentWidth())
 }
 
 func renderFrame(state *State, content string, width int) string {
 	return render.Frame(content, width, state.ImGay, state.AnimPhase, theme.PanelStyle)
+}
+
+func renderHelpHint(key string, description string) string {
+	keyStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Bold(true).Render(key)
+	descStyled := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(description)
+	return keyStyled + " " + descStyled
 }
 
 func renderOverview(state *State, rt Runtime) string {
@@ -148,7 +171,7 @@ func renderOverview(state *State, rt Runtime) string {
 	if stacked {
 		state.RightView.SetContent(renderChannelPanelBody(state, rt, total-frameInnerInset, state.RightView.Height))
 		right := renderFrame(state, state.RightView.View(), rightWidth)
-		layout := left + "\n\n" + right
+		layout := left + "\n" + right
 		return lipgloss.NewStyle().Width(total).Render(layout)
 	}
 
@@ -167,27 +190,35 @@ func renderActionsRowState(state *State, rt Runtime, maxWidth int) string {
 }
 
 func renderConnectToggle(state *State, rt Runtime) string {
+	hovered := state.HoverZone == zoneOverviewConnect
+	focused := state.Focus == state.ConnectIndex()
 	if !rt.Running && !rt.Connecting && !rt.CanConnect {
 		connect := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Connect")
 		disconnect := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("Disconnect")
 		content := connect + theme.SegmentBaseStyle.Render("|") + disconnect
 
-		if state.Focus == state.ConnectIndex() {
-			return theme.ButtonDisabledFocusedStyle.Render(content)
+		if focused {
+			return zone.Mark(zoneOverviewConnect, theme.ButtonDisabledFocusedStyle.Render(content))
+		}
+		if hovered {
+			return zone.Mark(zoneOverviewConnect, theme.ButtonDisabledHoverStyle.Render(content))
 		}
 
-		return theme.ButtonDisabledStyle.Render(content)
+		return zone.Mark(zoneOverviewConnect, theme.ButtonDisabledStyle.Render(content))
 	}
 
 	if rt.Connecting {
 		connecting := RainbowText("Connecting...", state.AnimPhase)
 		content := theme.SegmentOnStyle.Render(connecting) + theme.SegmentBaseStyle.Render("|") + theme.SegmentOffStyle.Render("Disconnect")
 
-		if state.Focus == state.ConnectIndex() {
-			return theme.ButtonFocusedStyle.Render(content)
+		if focused {
+			return zone.Mark(zoneOverviewConnect, theme.ButtonFocusedStyle.Render(content))
+		}
+		if hovered {
+			return zone.Mark(zoneOverviewConnect, theme.ButtonHoverStyle.Render(content))
 		}
 
-		return theme.ButtonStyle.Render(content)
+		return zone.Mark(zoneOverviewConnect, theme.ButtonStyle.Render(content))
 	}
 
 	connect := theme.SegmentOffStyle.Render("Connect")
@@ -201,11 +232,14 @@ func renderConnectToggle(state *State, rt Runtime) string {
 
 	content := connect + theme.SegmentBaseStyle.Render("|") + disconnect
 
-	if state.Focus == state.ConnectIndex() {
-		return theme.ButtonFocusedStyle.Render(content)
+	if focused {
+		return zone.Mark(zoneOverviewConnect, theme.ButtonFocusedStyle.Render(content))
+	}
+	if hovered {
+		return zone.Mark(zoneOverviewConnect, theme.ButtonHoverStyle.Render(content))
 	}
 
-	return theme.ButtonStyle.Render(content)
+	return zone.Mark(zoneOverviewConnect, theme.ButtonStyle.Render(content))
 }
 
 func renderLogsButton(state *State) string {
@@ -215,19 +249,25 @@ func renderLogsButton(state *State) string {
 	}
 
 	if state.Focus == state.LogsIndex() {
-		return theme.ButtonFocusedStyle.Render(label)
+		return zone.Mark(zoneOverviewLogs, theme.ButtonFocusedStyle.Render(label))
+	}
+	if state.HoverZone == zoneOverviewLogs {
+		return zone.Mark(zoneOverviewLogs, theme.ButtonHoverStyle.Render(label))
 	}
 
-	return theme.ButtonStyle.Render(label)
+	return zone.Mark(zoneOverviewLogs, theme.ButtonStyle.Render(label))
 }
 
 func renderQuitButton(state *State) string {
 	label := "Quit"
 	if state.Focus == state.QuitIndex() {
-		return theme.ButtonFocusedStyle.Render(label)
+		return zone.Mark(zoneOverviewQuit, theme.ButtonFocusedStyle.Render(label))
+	}
+	if state.HoverZone == zoneOverviewQuit {
+		return zone.Mark(zoneOverviewQuit, theme.ButtonHoverStyle.Render(label))
 	}
 
-	return theme.ButtonStyle.Render(label)
+	return zone.Mark(zoneOverviewQuit, theme.ButtonStyle.Render(label))
 }
 
 func renderChannelPanelBody(state *State, rt Runtime, width int, height int) string {
@@ -270,23 +310,28 @@ func renderChannelPanelBody(state *State, rt Runtime, width int, height int) str
 }
 
 func renderSettings(state *State) string {
+	panelWidth := settingsPanelWidth(state)
 	labels := []string{"Base URL", "Token", "Log Dir"}
 	labelWidth := settingsLabelWidth
 	rows := make([]string, 0, len(state.Inputs)+settingsRowExtraCapacity)
-	controlWidth := max(state.SettingsView.Width-labelWidth-outerPaneGap, settingsControlMinWidth)
+	controlWidth := max(state.SettingsView.Width-labelWidth-settingsLabelGap-settingsRightEdgeGuard, settingsControlMinWidth)
 	for i := range state.Inputs {
 		label := labels[i]
 		if state.Focus == i {
-			label = theme.FocusStyle.Render("-> " + label)
+			label = theme.FocusStyle.Render(label)
 		}
 		state.Inputs[i].Width = controlWidth
-		rows = append(rows, fmt.Sprintf("%-*s %s", labelWidth, label+":", state.Inputs[i].View()))
+		inputView := zone.Mark(zoneSettingsInput(i), state.Inputs[i].View())
+		rows = append(rows, renderSettingsLabelRow(label+":", inputView, labelWidth))
 	}
 
 	browseButton := theme.ButtonStyle.Render("Choose Folder")
 	if state.Focus == state.BrowseIndex() {
 		browseButton = theme.ButtonFocusedStyle.Render("Choose Folder")
+	} else if state.HoverZone == zoneSettingsBrowse {
+		browseButton = theme.ButtonHoverStyle.Render("Choose Folder")
 	}
+	browseButton = zone.Mark(zoneSettingsBrowse, browseButton)
 
 	browseLine := lipgloss.NewStyle().PaddingLeft(settingsBrowsePaddingLeft).Render(browseButton)
 	rows = append(rows, browseLine)
@@ -296,10 +341,16 @@ func renderSettings(state *State) string {
 	}
 
 	autoLabel := "Auto"
+	autoHover := state.HoverZone == zoneSettingsAutoConnect
+	autoControl := theme.ButtonStyle.Render(auto)
 	if state.Focus == state.AutoConnectIndex() {
 		autoLabel = theme.FocusStyle.Render("-> Auto")
+		autoControl = theme.ButtonFocusedStyle.Render(auto)
+	} else if autoHover {
+		autoControl = theme.ButtonHoverStyle.Render(auto)
 	}
-	rows = append(rows, fmt.Sprintf("%-*s %s", labelWidth, autoLabel+":", auto))
+	rows = append(rows, renderSettingsLabelRow(autoLabel+":", "", labelWidth))
+	rows = append(rows, lipgloss.NewStyle().PaddingLeft(settingsBrowsePaddingLeft).Render(zone.Mark(zoneSettingsAutoConnect, autoControl)))
 	saveLabel := "Save"
 	cancelLabel := "Cancel"
 	if state.SettingsDirty {
@@ -326,15 +377,57 @@ func renderSettings(state *State) string {
 		}
 	}
 
+	if state.HoverZone == zoneSettingsSave {
+		if state.SettingsDirty {
+			saveLabel = theme.ButtonHoverStyle.Render("Save")
+		} else {
+			saveLabel = theme.ButtonDisabledHoverStyle.Render("Save")
+		}
+	}
+	if state.HoverZone == zoneSettingsCancel {
+		if state.SettingsDirty {
+			cancelLabel = theme.ButtonHoverStyle.Render("Cancel")
+		} else {
+			cancelLabel = theme.ButtonDisabledHoverStyle.Render("Cancel")
+		}
+	}
+
+	saveLabel = zone.Mark(zoneSettingsSave, saveLabel)
+	cancelLabel = zone.Mark(zoneSettingsCancel, cancelLabel)
 	rows = append(rows, "")
 	rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Left, saveLabel, " ", cancelLabel))
 	if state.SettingsDirty {
 		rows = append(rows, theme.HelpStyle.Render("unsaved changes"))
 	}
+	settingsContent := strings.Join(rows, "\n")
+	settingsContent = fitTextToWidth(settingsContent, state.SettingsView.Width)
+	state.SettingsView.SetContent(settingsContent)
 
-	state.SettingsView.SetContent(strings.Join(rows, "\n"))
+	return renderFrame(state, state.SettingsView.View(), panelWidth)
+}
 
-	return renderFrame(state, state.SettingsView.View(), state.PageWidth())
+func renderSettingsLabelRow(label string, control string, labelWidth int) string {
+	labelCell := lipgloss.NewStyle().Width(labelWidth).Render(label)
+	if control == "" {
+		return labelCell
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, labelCell, strings.Repeat(" ", settingsLabelGap), control)
+}
+
+func fitTextToWidth(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		fitted := ansi.Cut(line, 0, width)
+		if pad := width - ansi.StringWidth(fitted); pad > 0 {
+			fitted += strings.Repeat(" ", pad)
+		}
+		out = append(out, fitted)
+	}
+	return strings.Join(out, "\n")
 }
 
 func renderLogPanel(state *State) string {
@@ -346,10 +439,19 @@ func renderLogPanel(state *State) string {
 	debug := theme.ButtonStyle.Render(check)
 	if state.Focus == state.LogsDebugIndex() {
 		debug = theme.ButtonFocusedStyle.Render(check)
+	} else if state.HoverZone == zoneOverviewLogsDebug {
+		debug = theme.ButtonHoverStyle.Render(check)
 	}
+	debug = zone.Mark(zoneOverviewLogsDebug, debug)
 
-	followHint := theme.HelpStyle.Render("ctrl+f follow")
-	toolbar := lipgloss.JoinHorizontal(lipgloss.Center, theme.TitleStyle.Render("Logs"), "  ", debug, "  ", followHint)
+	toolbar := lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		theme.TitleStyle.Render("Logs"),
+		"  ",
+		debug,
+		"  ",
+		renderHelpHint("wheel", "scroll"),
+	)
 	content := state.LogView.View()
 	withBar := WithScrollBar(content, state.LogView.Width, state.LogView.Height, state.LogView.ScrollPercent())
 
@@ -361,9 +463,18 @@ func renderQuitConfirmDialog(state *State) string {
 	quitButton := theme.ButtonStyle.Render("Quit")
 	if state.ConfirmQuitChoice == 0 {
 		cancelButton = theme.ButtonFocusedStyle.Render("Cancel")
-	} else {
+	}
+	if state.HoverZone == zoneDialogQuitCancel {
+		cancelButton = theme.ButtonHoverStyle.Render("Cancel")
+	}
+	if state.ConfirmQuitChoice == 1 {
 		quitButton = theme.ButtonFocusedStyle.Render("Quit")
 	}
+	if state.HoverZone == zoneDialogQuitAccept {
+		quitButton = theme.ButtonHoverStyle.Render("Quit")
+	}
+	cancelButton = zone.Mark(zoneDialogQuitCancel, cancelButton)
+	quitButton = zone.Mark(zoneDialogQuitAccept, quitButton)
 
 	buttonRow := lipgloss.JoinHorizontal(lipgloss.Top, cancelButton, "  ", quitButton)
 	dialogWidth := min(state.ContentWidth()-dialogHorizontalInset, quitDialogWidth)
@@ -402,10 +513,8 @@ func renderFilePickerDialog(state *State) string {
 }
 
 func renderModalOverlay(state *State, base string, dialog string) string {
-	faded := theme.ModalBackdrop.Render(base)
-	overlay := lipgloss.Place(state.Width, state.Height, lipgloss.Center, lipgloss.Center, dialog)
-
-	return faded + "\n" + overlay
+	_ = base
+	return lipgloss.Place(state.Width, state.Height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 func overviewLeftFrameWidth(state *State, rt Runtime, total int) int {
@@ -443,6 +552,7 @@ func overviewPaneLayout(total int, leftWidth int) (int, int, bool) {
 
 func ResizePaneViewports(state *State, rt Runtime) {
 	total := state.PageWidth()
+	settingsTotal := settingsPanelWidth(state)
 	leftW := overviewLeftFrameWidth(state, rt, total)
 	leftWidth, rightWidth, stacked := overviewPaneLayout(total, leftW)
 	if stacked {
@@ -451,7 +561,7 @@ func ResizePaneViewports(state *State, rt Runtime) {
 
 	leftInner := max(leftWidth-frameInnerInset, paneInnerMinWidth)
 	rightInner := max(rightWidth-frameInnerInset, paneInnerMinWidth)
-	settingsInner := max(total-frameInnerInset, paneInnerMinWidth)
+	settingsInner := max(settingsTotal-frameInnerInset, paneInnerMinWidth)
 	paneHeight := defaultOverviewPaneHeight
 	if state.Height >= largeOverviewHeightCutover {
 		paneHeight = largeOverviewPaneHeight
@@ -463,4 +573,12 @@ func ResizePaneViewports(state *State, rt Runtime) {
 	state.RightView.Height = paneHeight
 	state.SettingsView.Width = settingsInner
 	state.SettingsView.Height = max(settingsPaneMinHeight, paneHeight+settingsHeightPadding)
+}
+
+func settingsPanelWidth(state *State) int {
+	width := state.PageWidth()
+	if runtime.GOOS == "windows" && width > minPageWidth {
+		width--
+	}
+	return max(width, minPageWidth)
 }

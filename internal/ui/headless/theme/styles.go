@@ -3,6 +3,8 @@ package theme
 import (
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -14,9 +16,25 @@ var (
 	ErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 	HelpStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
-	TabActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("27")).Padding(0, 1)
-	TabInactiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Background(lipgloss.Color("236")).Padding(0, 1)
-	ModalBackdrop    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	TabActiveStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("27")).
+			Border(lipgloss.NormalBorder(), true, true, true, true).
+			BorderForeground(lipgloss.Color("39"))
+	TabInactiveStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("245")).
+				Background(lipgloss.Color("236")).
+				Border(lipgloss.NormalBorder(), true, true, true, true).
+				BorderForeground(lipgloss.Color("240"))
+	TabHoverStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("236")).
+			Border(lipgloss.NormalBorder(), true, true, true, true).
+			BorderForeground(lipgloss.Color("15"))
+	ModalBackdrop = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
 	DisabledButtonBorder = lipgloss.Border{
 		Top:         "╌",
@@ -33,32 +51,26 @@ var (
 
 	ButtonStyle                = lipgloss.NewStyle().Padding(0, 1).Border(lipgloss.NormalBorder())
 	ButtonFocusedStyle         = ButtonStyle.BorderForeground(lipgloss.Color("10")).Foreground(lipgloss.Color("10"))
+	ButtonHoverStyle           = ButtonStyle.BorderForeground(lipgloss.Color("15")).Foreground(lipgloss.Color("15"))
 	ButtonDisabledBaseStyle    = ButtonStyle.Border(DisabledButtonBorder).BorderForeground(DisabledBorderColor)
 	ButtonDisabledStyle        = ButtonDisabledBaseStyle.Foreground(DisabledTextColor)
 	ButtonDisabledFocusedStyle = ButtonStyle.BorderForeground(lipgloss.Color("255")).Foreground(lipgloss.Color("250"))
+	ButtonDisabledHoverStyle   = ButtonDisabledBaseStyle.BorderForeground(lipgloss.Color("255")).Foreground(lipgloss.Color("250"))
 	SegmentBaseStyle           = lipgloss.NewStyle().Padding(0, 1)
 	SegmentOnStyle             = SegmentBaseStyle.Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("10"))
 	SegmentOffStyle            = SegmentBaseStyle.Foreground(lipgloss.Color("245")).Background(lipgloss.Color("236"))
 )
 
-type rgb struct {
-	r uint8
-	g uint8
-	b uint8
+var rainbowStops = []string{
+	"#ff1f5a", "#ff8f1f", "#ffe44d", "#4ce06b", "#39d3ff", "#4f6bff", "#c45bff",
 }
 
-var rainbowPalette = []rgb{
-	{255, 0, 0},
-	{255, 127, 0},
-	{255, 255, 0},
-	{0, 255, 0},
-	{0, 180, 255},
-	{75, 0, 130},
-	{148, 0, 211},
+func RainbowSpan() float64 {
+	return float64(max(len(rainbowStops)-1, 1))
 }
 
 func RainbowColorAt(position float64) string {
-	n := float64(len(rainbowPalette))
+	n := float64(len(rainbowStops))
 	if n == 0 {
 		return "#ffffff"
 	}
@@ -67,16 +79,28 @@ func RainbowColorAt(position float64) string {
 		wrapped += n
 	}
 	i0 := int(math.Floor(wrapped))
-	i1 := (i0 + 1) % len(rainbowPalette)
+	i1 := (i0 + 1) % len(rainbowStops)
 	t := wrapped - float64(i0)
-	c := lerpRGB(rainbowPalette[i0], rainbowPalette[i1], t)
-	return fmt.Sprintf("#%02x%02x%02x", c.r, c.g, c.b)
+	return interpolateHex(rainbowStops[i0], rainbowStops[i1], t)
 }
 
-func lerpRGB(a rgb, b rgb, t float64) rgb {
-	return rgb{
-		r: uint8(float64(a.r) + (float64(b.r)-float64(a.r))*t),
-		g: uint8(float64(a.g) + (float64(b.g)-float64(a.g))*t),
-		b: uint8(float64(a.b) + (float64(b.b)-float64(a.b))*t),
+func interpolateHex(a string, b string, t float64) string {
+	ar, ag, ab := parseHexRGB(a)
+	br, bg, bb := parseHexRGB(b)
+	lerp := func(x int, y int) int {
+		return int(float64(x) + (float64(y)-float64(x))*t)
 	}
+	return fmt.Sprintf("#%02x%02x%02x", lerp(ar, br), lerp(ag, bg), lerp(ab, bb))
+}
+
+func parseHexRGB(s string) (int, int, int) {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "#")
+	if len(s) != 6 {
+		return 255, 255, 255
+	}
+	v, err := strconv.ParseUint(s, 16, 32)
+	if err != nil {
+		return 255, 255, 255
+	}
+	return int((v >> 16) & 0xff), int((v >> 8) & 0xff), int(v & 0xff)
 }
