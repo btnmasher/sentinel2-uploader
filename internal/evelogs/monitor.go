@@ -300,15 +300,34 @@ func (m *Monitor) maybeTrackEventPath(path string) {
 		return
 	}
 	clean := filepath.Clean(path)
-	if _, ok := m.tracked[clean]; ok {
-		return
-	}
 	channel, ok := ResolveChannelForPath(clean, m.channels)
 	if !ok || channel.ID == "" {
 		return
 	}
+	meta, ok := parseLogFileMeta(clean)
+	if !ok {
+		return
+	}
 	if info, err := os.Stat(clean); err != nil || info.IsDir() {
 		return
+	}
+	if existingPath, found := m.findTrackedForChannelCharacter(channel.ID, meta.CharacterID); found {
+		if existingPath == clean {
+			return
+		}
+		if !isPathNewerByMeta(clean, existingPath) {
+			return
+		}
+		m.logger.Info("switching tracked log file",
+			logging.Field("from", existingPath),
+			logging.Field("to", clean),
+			logging.Field("channel_id", channel.ID),
+			logging.Field("character_id", meta.CharacterID),
+		)
+		if m.callbacks.OnUntracked != nil {
+			m.callbacks.OnUntracked(existingPath)
+		}
+		delete(m.tracked, existingPath)
 	}
 	m.addTrackedLog(LogSelection{Path: clean, Channel: channel})
 	if tracked, exists := m.tracked[clean]; exists {
@@ -316,6 +335,53 @@ func (m *Monitor) maybeTrackEventPath(path string) {
 			m.logger.Debugf("failed to prime new log file %s: %v", clean, err)
 		}
 	}
+}
+
+func (m *Monitor) findTrackedForChannelCharacter(channelID string, characterID string) (string, bool) {
+	channelID = strings.TrimSpace(channelID)
+	characterID = strings.TrimSpace(characterID)
+	if channelID == "" || characterID == "" {
+		return "", false
+	}
+	for path, tracked := range m.tracked {
+		if strings.TrimSpace(tracked.selection.Channel.ID) != channelID {
+			continue
+		}
+		meta, ok := parseLogFileMeta(path)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(meta.CharacterID) == characterID {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+func isPathNewerByMeta(candidatePath string, existingPath string) bool {
+	candidateMeta, okCandidate := parseLogFileMeta(candidatePath)
+	existingMeta, okExisting := parseLogFileMeta(existingPath)
+	if okCandidate && okExisting {
+		if candidateMeta.Timestamp.After(existingMeta.Timestamp) {
+			return true
+		}
+		if existingMeta.Timestamp.After(candidateMeta.Timestamp) {
+			return false
+		}
+	}
+
+	candidateInfo, candidateErr := os.Stat(candidatePath)
+	existingInfo, existingErr := os.Stat(existingPath)
+	if candidateErr == nil && existingErr == nil {
+		if candidateInfo.ModTime().After(existingInfo.ModTime()) {
+			return true
+		}
+		if existingInfo.ModTime().After(candidateInfo.ModTime()) {
+			return false
+		}
+	}
+
+	return candidatePath > existingPath
 }
 
 func (m *Monitor) maybeUntrackPath(path string) {

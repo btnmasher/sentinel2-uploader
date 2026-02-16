@@ -292,11 +292,11 @@ func (c *controller) buildUI(defaults config.Options) {
 	c.initLogWindow()
 	c.setStatus("Idle", statusIdleColor)
 
-	c.startButton = widget.NewButton("Start uploader", func() {
+	c.startButton = widget.NewButton("Connect", func() {
 		c.startUploader()
 		c.refreshTrayMenu()
 	})
-	c.stopButton = widget.NewButton("Stop uploader", func() {
+	c.stopButton = widget.NewButton("Disconnect", func() {
 		c.stopUploader()
 		c.refreshTrayMenu()
 	})
