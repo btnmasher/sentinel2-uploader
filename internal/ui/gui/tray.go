@@ -67,7 +67,7 @@ func (c *controller) refreshTrayMenu() {
 	startMinItem.Checked = c.settings.StartMinimized
 
 	exitItem := fyne.NewMenuItem("Exit", func() {
-		c.requestQuit()
+		c.requestQuitImmediate()
 	})
 
 	tray := fyne.NewMenu("Sentinel2 Uploader",

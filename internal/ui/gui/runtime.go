@@ -362,10 +362,18 @@ func (c *controller) quitApp() {
 }
 
 func (c *controller) requestQuit() {
+	c.requestQuitWithConfirm(false)
+}
+
+func (c *controller) requestQuitImmediate() {
+	c.requestQuitWithConfirm(true)
+}
+
+func (c *controller) requestQuitWithConfirm(skipConfirm bool) {
 	if c.shuttingDown {
 		return
 	}
-	if !c.runner.IsRunning() {
+	if skipConfirm || !c.runner.IsRunning() {
 		c.quitApp()
 		return
 	}
