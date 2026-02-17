@@ -59,6 +59,10 @@ type State struct {
 	ConfirmQuit       bool
 	ConfirmQuitChoice int
 	ErrorModalText    string
+	UpdateModalOpen   bool
+	UpdateModalChoice int
+	UpdateLatestTag   string
+	UpdateReleaseURL  string
 	FilePickerOpen    bool
 	FilePicker        filepicker.Model
 	HoverZone         string

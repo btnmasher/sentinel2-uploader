@@ -39,6 +39,7 @@ const (
 	settingsBrowsePaddingLeft  = settingsLabelWidth + 1
 	dialogHorizontalInset      = 8
 	quitDialogWidth            = 72
+	updateDialogWidth          = 84
 	errorDialogWidth           = 78
 	filePickerDialogMaxWidth   = 96
 	leftFrameExtraWidth        = 6
@@ -67,6 +68,10 @@ func RenderApp(state *State, rt Runtime) string {
 
 	if state.ErrorModalText != "" {
 		return zone.Scan(renderModalOverlay(state, base, renderErrorDialog(state)))
+	}
+
+	if state.UpdateModalOpen {
+		return zone.Scan(renderModalOverlay(state, base, renderUpdateDialog(state, rt)))
 	}
 
 	if state.ConfirmQuit {
@@ -501,6 +506,49 @@ func renderErrorDialog(state *State) string {
 	}, "\n")
 
 	return renderFrame(state, body, min(state.ContentWidth()-dialogHorizontalInset, errorDialogWidth))
+}
+
+func renderUpdateDialog(state *State, rt Runtime) string {
+	laterButton := theme.ButtonStyle.Render("Later")
+	openButton := theme.ButtonStyle.Render("Open Release")
+	if state.UpdateModalChoice == UpdateChoiceLater {
+		laterButton = theme.ButtonFocusedStyle.Render("Later")
+	}
+	if state.HoverZone == zoneDialogUpdateLater {
+		laterButton = theme.ButtonHoverStyle.Render("Later")
+	}
+	if state.UpdateModalChoice == 1 {
+		openButton = theme.ButtonFocusedStyle.Render("Open Release")
+	}
+	if state.HoverZone == zoneDialogUpdateOpen {
+		openButton = theme.ButtonHoverStyle.Render("Open Release")
+	}
+	laterButton = zone.Mark(zoneDialogUpdateLater, laterButton)
+	openButton = zone.Mark(zoneDialogUpdateOpen, openButton)
+
+	buttonRow := lipgloss.JoinHorizontal(lipgloss.Top, laterButton, "  ", openButton)
+	dialogWidth := min(state.ContentWidth()-dialogHorizontalInset, updateDialogWidth)
+	buttonLine := lipgloss.NewStyle().
+		Width(max(dialogWidth-frameInnerInset, 1)).
+		AlignHorizontal(lipgloss.Center).
+		Render(buttonRow)
+
+	url := strings.TrimSpace(state.UpdateReleaseURL)
+	if url == "" {
+		url = "https://github.com/btnmasher/sentinel2-uploader/releases/latest"
+	}
+	body := strings.Join([]string{
+		theme.TitleStyle.Render("Update Available"),
+		"A newer uploader version is available (" + state.UpdateLatestTag + ").",
+		"Current version: " + strings.TrimSpace(rt.BuildVersion),
+		"",
+		url,
+		"",
+		buttonLine,
+		theme.HelpStyle.Render("tab/arrow switch • enter confirms"),
+	}, "\n")
+
+	return renderFrame(state, body, dialogWidth)
 }
 
 func renderFilePickerDialog(state *State) string {

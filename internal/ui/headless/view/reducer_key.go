@@ -13,11 +13,13 @@ const (
 	KeyEffectActivateFocused
 	KeyEffectSaveSettings
 	KeyEffectConfirmQuitAccept
+	KeyEffectUpdateAccept
 )
 
 const confirmChoiceCount = 2
 
 const confirmChoiceQuit = 1
+const updateChoiceOpen = 1
 
 func ReduceKey(state State, msg tea.KeyMsg) (State, KeyEffect) {
 	if state.ErrorModalText != "" {
@@ -25,6 +27,26 @@ func ReduceKey(state State, msg tea.KeyMsg) (State, KeyEffect) {
 			state.ErrorModalText = ""
 		}
 		return state, KeyEffectNone
+	}
+
+	if state.UpdateModalOpen {
+		switch {
+		case msg.String() == "esc":
+			state.UpdateModalOpen = false
+			return state, KeyEffectNone
+		case key.Matches(msg, state.Keys.ModalToggle):
+			state.UpdateModalChoice = (state.UpdateModalChoice + 1) % confirmChoiceCount
+			return state, KeyEffectNone
+		case key.Matches(msg, state.Keys.Activate):
+			if state.UpdateModalChoice == updateChoiceOpen {
+				state.UpdateModalOpen = false
+				return state, KeyEffectUpdateAccept
+			}
+			state.UpdateModalOpen = false
+			return state, KeyEffectNone
+		default:
+			return state, KeyEffectNone
+		}
 	}
 
 	if state.ConfirmQuit {

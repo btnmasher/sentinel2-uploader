@@ -25,6 +25,14 @@ type logMsg string
 type statusMsg string
 type tickMsg struct{}
 type channelsUpdatedMsg []client.ChannelConfig
+type updateAvailableMsg struct {
+	tag string
+	url string
+}
+type openReleaseResultMsg struct {
+	url string
+	err error
+}
 
 type runDoneMsg struct {
 	err error
@@ -49,6 +57,7 @@ const (
 type modelDeps struct {
 	runner      *runtime.Controller
 	logger      *logging.Logger
+	rootCtx     context.Context
 	unsubscribe func()
 	rootCancel  context.CancelFunc
 	program     *tea.Program
@@ -58,6 +67,7 @@ type modelChannels struct {
 	logCh    chan string
 	cfgCh    chan []client.ChannelConfig
 	statusCh chan string
+	updateCh chan updateAvailableMsg
 }
 
 type modelRuntime struct {
@@ -74,7 +84,8 @@ type modelRuntime struct {
 }
 
 type headlessModel struct {
-	buildVersion string
+	buildVersion   string
+	updatePrompted string
 	modelDeps
 	modelChannels
 	modelRuntime

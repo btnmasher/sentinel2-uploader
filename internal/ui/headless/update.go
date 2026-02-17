@@ -54,6 +54,23 @@ func (m *headlessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.channels = append([]client.ChannelConfig(nil), msg...)
 		m.refreshChannelHealth()
 		return m, waitForChannels(m.cfgCh)
+	case updateAvailableMsg:
+		tag := strings.TrimSpace(msg.tag)
+		if tag == "" || m.updatePrompted == tag {
+			return m, waitForUpdate(m.updateCh)
+		}
+		m.updatePrompted = tag
+		m.ui.UpdateLatestTag = tag
+		m.ui.UpdateReleaseURL = strings.TrimSpace(msg.url)
+		m.ui.UpdateModalChoice = headlessview.UpdateChoiceLater
+		m.ui.UpdateModalOpen = true
+		return m, waitForUpdate(m.updateCh)
+	case openReleaseResultMsg:
+		if msg.err != nil {
+			m.ui.ErrorModalText = "Failed to open release page: " + msg.err.Error()
+			m.logger.Warn("failed to open release url", logging.Field("url", msg.url), logging.Field("error", msg.err))
+		}
+		return m, nil
 	case statusMsg:
 		m.applyRuntimeStatus(string(msg))
 		return m, waitForStatus(m.statusCh)
@@ -113,6 +130,8 @@ func (m *headlessModel) updateMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.activateFocusedControl())
 	case headlessview.MouseEffectConfirmQuitAccept:
 		return m, tea.Batch(cmd, m.beginQuitCmd())
+	case headlessview.MouseEffectUpdateAccept:
+		return m, tea.Batch(cmd, m.openLatestReleaseCmd())
 	}
 	return m, cmd
 }
@@ -129,6 +148,8 @@ func (m *headlessModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.activateFocusedControl()
 	case headlessview.KeyEffectConfirmQuitAccept:
 		return m, m.beginQuitCmd()
+	case headlessview.KeyEffectUpdateAccept:
+		return m, m.openLatestReleaseCmd()
 	default:
 		return m, nil
 	}

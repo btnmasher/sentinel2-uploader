@@ -16,8 +16,10 @@ const (
 	zoneSettingsSave        = "settings-save"
 	zoneSettingsCancel      = "settings-cancel"
 
-	zoneDialogQuitCancel = "dialog-quit-cancel"
-	zoneDialogQuitAccept = "dialog-quit-accept"
+	zoneDialogQuitCancel  = "dialog-quit-cancel"
+	zoneDialogQuitAccept  = "dialog-quit-accept"
+	zoneDialogUpdateLater = "dialog-update-later"
+	zoneDialogUpdateOpen  = "dialog-update-open"
 )
 
 func zoneSettingsInput(index int) string {

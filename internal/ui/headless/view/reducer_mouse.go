@@ -11,6 +11,7 @@ const (
 	MouseEffectNone MouseEffect = iota
 	MouseEffectActivateFocused
 	MouseEffectConfirmQuitAccept
+	MouseEffectUpdateAccept
 )
 
 func ReduceMouse(state State, msg tea.MouseMsg) (State, tea.Cmd, MouseEffect) {
@@ -47,6 +48,21 @@ func ReduceMouse(state State, msg tea.MouseMsg) (State, tea.Cmd, MouseEffect) {
 	isPrimaryClick := msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft
 	if !isPrimaryClick {
 		return state, tea.Batch(cmds...), MouseEffectNone
+	}
+
+	if state.UpdateModalOpen {
+		switch {
+		case inBounds(zoneDialogUpdateLater, msg):
+			state.UpdateModalChoice = UpdateChoiceLater
+			state.UpdateModalOpen = false
+			return state, tea.Batch(cmds...), MouseEffectNone
+		case inBounds(zoneDialogUpdateOpen, msg):
+			state.UpdateModalChoice = 1
+			state.UpdateModalOpen = false
+			return state, tea.Batch(cmds...), MouseEffectUpdateAccept
+		default:
+			return state, tea.Batch(cmds...), MouseEffectNone
+		}
 	}
 
 	if state.ConfirmQuit {
@@ -139,6 +155,15 @@ func inBounds(zoneID string, msg tea.MouseMsg) bool {
 }
 
 func hoveredZone(state State, msg tea.MouseMsg) string {
+	if state.UpdateModalOpen {
+		if inBounds(zoneDialogUpdateLater, msg) {
+			return zoneDialogUpdateLater
+		}
+		if inBounds(zoneDialogUpdateOpen, msg) {
+			return zoneDialogUpdateOpen
+		}
+		return ""
+	}
 	if state.ConfirmQuit {
 		if inBounds(zoneDialogQuitCancel, msg) {
 			return zoneDialogQuitCancel

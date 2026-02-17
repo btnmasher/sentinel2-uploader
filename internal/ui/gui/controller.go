@@ -62,6 +62,7 @@ type channelStatusRow struct {
 
 type controller struct {
 	app      fyne.App
+	version  string
 	settings config.UploaderSettings
 	draft    config.UploaderSettings
 	win      fyne.Window
@@ -119,17 +120,18 @@ type controller struct {
 	appCancel      context.CancelFunc
 	shuttingDown   bool
 	confirmingQuit bool
+	updatePrompted string
 }
 
 func Run(rootCtx context.Context, buildVersion string, defaults config.Options) {
 	uiApp := app.New()
 	uiApp.Settings().SetTheme(newUploaderTheme())
-	c := newController(rootCtx, uiApp, defaults)
+	c := newController(rootCtx, uiApp, defaults, buildVersion)
 	c.logger.Info("starting uploader UI", logging.Field("version", buildVersion))
 	c.run()
 }
 
-func newController(rootCtx context.Context, uiApp fyne.App, defaults config.Options) *controller {
+func newController(rootCtx context.Context, uiApp fyne.App, defaults config.Options, buildVersion string) *controller {
 	settings := config.SettingsFromOptions(defaults)
 	if saved, err := config.LoadSettings(); err == nil {
 		defaults = config.MergeOptionsWithSettings(defaults, saved)
@@ -156,6 +158,7 @@ func newController(rootCtx context.Context, uiApp fyne.App, defaults config.Opti
 
 	c := &controller{
 		app:       uiApp,
+		version:   strings.TrimSpace(buildVersion),
 		settings:  settings,
 		draft:     settings,
 		logger:    logger,
@@ -181,6 +184,7 @@ func newController(rootCtx context.Context, uiApp fyne.App, defaults config.Opti
 func (c *controller) run() {
 	c.setRunningState(false)
 	c.startChannelHealthLoop()
+	c.startUpdateCheckLoop()
 	go func() {
 		<-c.appCtx.Done()
 		fyne.Do(func() {

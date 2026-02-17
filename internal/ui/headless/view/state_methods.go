@@ -20,6 +20,7 @@ const (
 	DefaultNonLogLayoutReserveMin = 24
 	DefaultMinLogPanelHeight      = 8
 	ConfirmQuitChoiceCancel       = 0
+	UpdateChoiceLater             = 0
 )
 
 const (

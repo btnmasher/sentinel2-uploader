@@ -69,12 +69,14 @@ func newHeadlessModel(rootCtx context.Context, buildVersion string, opts config.
 		modelDeps: modelDeps{
 			runner:     runtime.NewController(runCtx),
 			logger:     logger,
+			rootCtx:    runCtx,
 			rootCancel: runCancel,
 		},
 		modelChannels: modelChannels{
 			logCh:    make(chan string, logChannelBufferSize),
 			cfgCh:    make(chan []client.ChannelConfig, configChannelBufferSize),
 			statusCh: make(chan string, statusChannelBufferSize),
+			updateCh: make(chan updateAvailableMsg, 2),
 		},
 		modelRuntime: modelRuntime{
 			status: "Idle",
@@ -100,7 +102,14 @@ func newHeadlessModel(rootCtx context.Context, buildVersion string, opts config.
 }
 
 func (m *headlessModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{waitForLog(m.logCh), waitForChannels(m.cfgCh), waitForStatus(m.statusCh), tickCmd()}
+	cmds := []tea.Cmd{
+		waitForLog(m.logCh),
+		waitForChannels(m.cfgCh),
+		waitForStatus(m.statusCh),
+		waitForUpdate(m.updateCh),
+		tickCmd(),
+		m.startUpdateCheckerCmd(),
+	}
 	if m.ui.AutoConn && m.canConnect() {
 		cmds = append(cmds, m.startUploaderCmd(true))
 	}
@@ -134,6 +143,16 @@ func waitForStatus(ch <-chan string) tea.Cmd {
 			return nil
 		}
 		return statusMsg(status)
+	}
+}
+
+func waitForUpdate(ch <-chan updateAvailableMsg) tea.Cmd {
+	return func() tea.Msg {
+		update, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return update
 	}
 }
 
