@@ -151,6 +151,11 @@ func (m *headlessModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case headlessview.KeyEffectUpdateAccept:
 		return m, m.openLatestReleaseCmd()
 	default:
+		nextState, cmd, ok := headlessview.ReduceInput(m.ui, msg)
+		if ok {
+			m.ui = nextState
+			return m, cmd
+		}
 		return m, nil
 	}
 }

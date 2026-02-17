@@ -75,7 +75,7 @@ func ReduceKey(state State, msg tea.KeyMsg) (State, KeyEffect) {
 		state.FollowLogs = true
 		state.LogView.GotoBottom()
 		return state, KeyEffectNone
-	case msg.String() == "ctrl+s" && state.Tab == TabSettings:
+	case key.Matches(msg, state.Keys.Save) && state.Tab == TabSettings:
 		return state, KeyEffectSaveSettings
 	case key.Matches(msg, state.Keys.PrevTab):
 		state.Tab = TabOverview

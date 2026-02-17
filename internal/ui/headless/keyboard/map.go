@@ -8,6 +8,7 @@ type Map struct {
 	PrevTab     key.Binding
 	NextTab     key.Binding
 	Activate    key.Binding
+	Save        key.Binding
 	Quit        key.Binding
 	ModalToggle key.Binding
 }
@@ -34,6 +35,10 @@ func New() Map {
 			key.WithKeys("enter", " "),
 			key.WithHelp("enter/space", "activate"),
 		),
+		Save: key.NewBinding(
+			key.WithKeys("ctrl+s"),
+			key.WithHelp("ctrl+s", "save"),
+		),
 		Quit: key.NewBinding(
 			key.WithKeys("ctrl+c"),
 			key.WithHelp("ctrl+c", "quit"),
@@ -46,7 +51,7 @@ func New() Map {
 }
 
 func (m Map) ShortHelp() []key.Binding {
-	return []key.Binding{m.NextFocus, m.Activate, m.PrevTab, m.NextTab, m.Quit}
+	return []key.Binding{m.NextFocus, m.Activate, m.Save, m.PrevTab, m.NextTab, m.Quit}
 }
 
 func (m Map) FullHelp() [][]key.Binding {

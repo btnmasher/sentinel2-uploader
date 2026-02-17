@@ -319,14 +319,20 @@ func renderSettings(state *State) string {
 	labels := []string{"Base URL", "Token", "Log Dir"}
 	labelWidth := settingsLabelWidth
 	rows := make([]string, 0, len(state.Inputs)+settingsRowExtraCapacity)
-	controlWidth := max(state.SettingsView.Width-labelWidth-settingsLabelGap-settingsRightEdgeGuard, settingsControlMinWidth)
+	// Keep one extra column of headroom for cursor/styled edge cases to avoid
+	// terminal soft-wrap at the viewport boundary.
+	controlWidth := state.SettingsView.Width - labelWidth - settingsLabelGap - settingsRightEdgeGuard - 1
+	if controlWidth < minViewportDimension {
+		controlWidth = minViewportDimension
+	}
 	for i := range state.Inputs {
 		label := labels[i]
 		if state.Focus == i {
 			label = theme.FocusStyle.Render(label)
 		}
 		state.Inputs[i].Width = controlWidth
-		inputView := zone.Mark(zoneSettingsInput(i), state.Inputs[i].View())
+		inputView := fitSingleLineToWidth(state.Inputs[i].View(), controlWidth)
+		inputView = zone.Mark(zoneSettingsInput(i), inputView)
 		rows = append(rows, renderSettingsLabelRow(label+":", inputView, labelWidth))
 	}
 
@@ -433,6 +439,18 @@ func fitTextToWidth(text string, width int) string {
 		out = append(out, fitted)
 	}
 	return strings.Join(out, "\n")
+}
+
+func fitSingleLineToWidth(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	line := strings.Split(text, "\n")[0]
+	fitted := ansi.Cut(line, 0, width)
+	if pad := width - ansi.StringWidth(fitted); pad > 0 {
+		fitted += strings.Repeat(" ", pad)
+	}
+	return fitted
 }
 
 func renderLogPanel(state *State) string {
