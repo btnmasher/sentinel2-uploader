@@ -14,13 +14,11 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"sentinel2-uploader/internal/client"
 	"sentinel2-uploader/internal/config"
 	"sentinel2-uploader/internal/logging"
-	"sentinel2-uploader/internal/runctx"
 	"sentinel2-uploader/internal/runtime"
 )
 
@@ -68,15 +66,36 @@ func (c *controller) bindLogs() {
 	})
 
 	c.startBackgroundLoop("gui log pump", func(ctx context.Context) {
-		for {
-			line, ok := runctx.RecvOrDone(ctx, "GUI log pump", c.logger, logCh)
-			if !ok {
+		flushTicker := time.NewTicker(40 * time.Millisecond)
+		defer flushTicker.Stop()
+		batch := make([]string, 0, 64)
+		flush := func() {
+			if len(batch) == 0 {
 				return
 			}
-			text := line
+			lines := append([]string(nil), batch...)
+			batch = batch[:0]
 			fyne.Do(func() {
-				c.appendLog(text)
+				c.appendLogs(lines)
 			})
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				flush()
+				return
+			case <-flushTicker.C:
+				flush()
+			case line, ok := <-logCh:
+				if !ok {
+					flush()
+					return
+				}
+				batch = append(batch, splitLogLines(line)...)
+				if len(batch) >= 120 {
+					flush()
+				}
+			}
 		}
 	})
 }
@@ -189,6 +208,7 @@ func (c *controller) setRunningState(running bool) {
 func (c *controller) setLogVisibility(visible bool) {
 	if visible {
 		c.logWindowOpen = true
+		c.refreshLogView()
 		c.logWindow.Show()
 		c.logWindow.RequestFocus()
 	} else {
@@ -259,71 +279,32 @@ func (c *controller) selectLogDir() {
 }
 
 func (c *controller) appendLog(line string) {
-	if c.logGrid == nil && c.logSelectable == nil {
+	c.appendLogs(splitLogLines(line))
+}
+
+func (c *controller) appendLogs(lines []string) {
+	if c.logSelectable == nil {
 		return
 	}
-
-	lines := splitLogLines(line)
 	if len(lines) == 0 {
 		return
 	}
 	c.logRawLines = append(c.logRawLines, lines...)
 	c.trimLogRows()
-	c.rebuildLogRows()
-	c.refreshLogView()
-	if c.followEnabled {
-		c.scrollLogsToBottom()
-	}
-}
 
-func (c *controller) trimLogRows() {
-	const maxLogRows = 1000
-	if len(c.logRawLines) <= maxLogRows {
+	if !c.logWindowOpen {
 		return
 	}
+	c.refreshLogView()
+}
+
+func (c *controller) trimLogRows() bool {
+	const maxLogRows = 5000
+	if len(c.logRawLines) <= maxLogRows {
+		return false
+	}
 	c.logRawLines = append([]string(nil), c.logRawLines[len(c.logRawLines)-maxLogRows:]...)
-	if len(c.logRows) > maxLogRows {
-		c.logRows = append([]widget.TextGridRow(nil), c.logRows[len(c.logRows)-maxLogRows:]...)
-	}
-}
-
-func (c *controller) rebuildLogRows() {
-	const maxRenderedRows = 1000
-	cols := c.logWrapColumns()
-	wrapped := wrapANSILines(c.logRawLines, cols)
-	if len(wrapped) > maxRenderedRows {
-		wrapped = wrapped[len(wrapped)-maxRenderedRows:]
-	}
-	rows := make([]widget.TextGridRow, 0, len(wrapped))
-	for _, line := range wrapped {
-		rows = append(rows, parseANSITextGridRow(line))
-	}
-	c.logRows = rows
-}
-
-func (c *controller) logWrapColumns() int {
-	if c.logGrid == nil {
-		return 120
-	}
-	widthPx := c.logGrid.Size().Width
-	if c.logScroll != nil && c.logScroll.Size().Width > 0 {
-		widthPx = c.logScroll.Size().Width
-	}
-	if widthPx <= 0 {
-		widthPx = 900
-	}
-	charSize := fyne.MeasureText("M", theme.TextSize(), fyne.TextStyle{Monospace: true})
-	if charSize.Width <= 0 {
-		return 120
-	}
-	cols := int(widthPx / charSize.Width)
-	if cols < 40 {
-		cols = 40
-	}
-	if cols > 240 {
-		cols = 240
-	}
-	return cols - 2
+	return true
 }
 
 func (c *controller) cleanup() {
@@ -381,6 +362,8 @@ func (c *controller) requestQuitWithConfirm(skipConfirm bool) {
 		return
 	}
 	c.confirmingQuit = true
+	c.win.Show()
+	c.win.RequestFocus()
 	dialog.ShowConfirm(
 		"Quit Sentinel2 Uploader?",
 		"This will stop the uploader connection.",

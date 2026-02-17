@@ -35,13 +35,15 @@ func NewMonitor(opts MonitorOptions, logger *logging.Logger, callbacks MonitorCa
 		opts.InitialLookback = defaultInitialLookback
 	}
 	return &Monitor{
-		opts:      opts,
-		logger:    logger,
-		callbacks: callbacks,
-		channels:  append([]client.ChannelConfig(nil), opts.Channels...),
-		tracked:   map[string]*trackedLog{},
-		recent:    map[string]time.Time{},
-		health:    map[string]channelHealthState{},
+		opts:                      opts,
+		logger:                    logger,
+		callbacks:                 callbacks,
+		channels:                  append([]client.ChannelConfig(nil), opts.Channels...),
+		tracked:                   map[string]*trackedLog{},
+		recent:                    map[string]time.Time{},
+		health:                    map[string]channelHealthState{},
+		lastPollTrackedCount:      -1,
+		lastDesiredSelectionCount: -1,
 	}
 }
 
@@ -159,7 +161,10 @@ func (m *Monitor) handleWatcherError(err error) {
 }
 
 func (m *Monitor) handlePollTick() {
-	m.logger.Debug("poll tick: syncing tracked logs", logging.Field("tracked", len(m.tracked)))
+	if len(m.tracked) != m.lastPollTrackedCount {
+		m.logger.Debug("poll tick: syncing tracked logs", logging.Field("tracked", len(m.tracked)))
+		m.lastPollTrackedCount = len(m.tracked)
+	}
 	if err := m.syncTrackedLogs(); err != nil {
 		m.logger.Debugf("log sync failed: %v", err)
 	}
@@ -188,7 +193,10 @@ func (m *Monitor) syncTrackedLogs() error {
 	for _, sel := range desired {
 		desiredByPath[filepath.Clean(sel.Path)] = sel
 	}
-	m.logger.Debug("computed desired log selections", logging.Field("count", len(desiredByPath)))
+	if len(desiredByPath) != m.lastDesiredSelectionCount {
+		m.logger.Debug("computed desired log selections", logging.Field("count", len(desiredByPath)))
+		m.lastDesiredSelectionCount = len(desiredByPath)
+	}
 
 	for path, sel := range desiredByPath {
 		if tracked, ok := m.tracked[path]; ok {

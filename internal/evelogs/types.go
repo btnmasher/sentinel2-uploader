@@ -19,6 +19,9 @@ type Monitor struct {
 	tracked map[string]*trackedLog
 	recent  map[string]time.Time
 	health  map[string]channelHealthState
+
+	lastPollTrackedCount      int
+	lastDesiredSelectionCount int
 }
 
 type MonitorOptions struct {

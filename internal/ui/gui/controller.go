@@ -8,10 +8,12 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -85,17 +87,12 @@ type controller struct {
 
 	logWindow       fyne.Window
 	logWindowOpen   bool
-	logGrid         *widget.TextGrid
-	logScroll       *container.Scroll
 	logSelectable   *widget.Entry
 	logSelectScroll *container.Scroll
-	selectableLogs  *widget.Check
 	followButton    *widget.Button
 	followEnabled   bool
 	followJumping   bool
 	logRawLines     []string
-	logRows         []widget.TextGridRow
-	logCols         int
 	hoverTipLayer   *fyne.Container
 	hoverTipShadow  *canvas.Rectangle
 	hoverTipCard    *fyne.Container
@@ -246,6 +243,8 @@ func (c *controller) startChannelHealthLoop() {
 }
 
 func (c *controller) buildUI(defaults config.Options) {
+	const tightPad = float32(6)
+	const widePad = float32(12)
 	c.baseURL = widget.NewEntry()
 	c.baseURL.SetText(c.draft.BaseURL)
 
@@ -306,8 +305,6 @@ func (c *controller) buildUI(defaults config.Options) {
 		c.refreshTrayMenu()
 	})
 	c.stopButton.Disable()
-	controlsGap := canvas.NewRectangle(color.Transparent)
-	controlsGap.SetMinSize(fyne.NewSize(12, 1))
 
 	c.baseURL.OnChanged = func(v string) {
 		c.draft.BaseURL = strings.TrimSpace(v)
@@ -326,7 +323,7 @@ func (c *controller) buildUI(defaults config.Options) {
 	}
 
 	browseLogDir := widget.NewButton("Browse...", c.selectLogDir)
-	logDirRow := container.NewBorder(nil, nil, nil, browseLogDir, c.logDir)
+	logDirRow := container.NewBorder(nil, nil, nil, container.NewHBox(c.horizontalGap(tightPad), browseLogDir), c.logDir)
 
 	form := container.NewVBox(
 		widget.NewLabel("Base URL"),
@@ -346,9 +343,9 @@ func (c *controller) buildUI(defaults config.Options) {
 	)
 	c.saveSettings = widget.NewButton("Save", c.saveDraftSettings)
 	c.cancelSettings = widget.NewButton("Cancel", c.cancelDraftSettings)
-	settingsActions := container.NewHBox(c.saveSettings, c.cancelSettings)
+	settingsActions := container.NewHBox(layout.NewSpacer(), c.saveSettings, c.horizontalGap(tightPad), c.cancelSettings)
 	statusRow := container.NewHBox(c.statusBadge, c.statusText)
-	controls := container.NewHBox(c.startButton, c.stopButton, controlsGap, c.showLogsButton, widget.NewLabel("Status:"), statusRow)
+	controls := container.NewHBox(c.startButton, c.horizontalGap(tightPad), c.stopButton, c.horizontalGap(widePad), c.showLogsButton, widget.NewLabel("Status:"), statusRow)
 
 	overviewTop := container.NewPadded(container.NewVBox(
 		controls,
@@ -360,7 +357,7 @@ func (c *controller) buildUI(defaults config.Options) {
 		container.NewCenter(c.channelNotice),
 		layout.NewSpacer(),
 	)
-	channelStack := container.NewMax(c.channelList, c.channelEmpty)
+	channelStack := container.NewStack(c.channelList, c.channelEmpty)
 	channelPanel := container.NewPadded(container.NewBorder(
 		widget.NewLabel("Configured Channels"),
 		nil,
@@ -395,7 +392,7 @@ func (c *controller) buildUI(defaults config.Options) {
 	c.hoverTipBG = canvas.NewRectangle(color.NRGBA{R: 44, G: 44, B: 44, A: 250})
 	c.hoverTipShadow = canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 120})
 	c.hoverTipShadow.Hide()
-	c.hoverTipCard = container.NewMax(c.hoverTipBG, container.NewPadded(c.hoverTipLabel))
+	c.hoverTipCard = container.NewStack(c.hoverTipBG, container.NewPadded(c.hoverTipLabel))
 	c.hoverTipCard.Hide()
 	c.hoverTipLayer = container.NewWithoutLayout(c.hoverTipShadow, c.hoverTipCard)
 	c.win.SetContent(container.NewStack(minAnchor, tabs, c.hoverTipLayer))
@@ -459,6 +456,12 @@ func (c *controller) toggleRow(label string, sw *sliderToggle) fyne.CanvasObject
 func (c *controller) verticalGap(height float32) fyne.CanvasObject {
 	spacer := canvas.NewRectangle(color.Transparent)
 	spacer.SetMinSize(fyne.NewSize(1, height))
+	return spacer
+}
+
+func (c *controller) horizontalGap(width float32) fyne.CanvasObject {
+	spacer := canvas.NewRectangle(color.Transparent)
+	spacer.SetMinSize(fyne.NewSize(width, 1))
 	return spacer
 }
 
@@ -696,28 +699,19 @@ func (c *controller) rebuildChannelRows() {
 }
 
 func (c *controller) initLogWindow() {
-	c.logGrid = widget.NewTextGrid()
-	c.logGrid.Scroll = fyne.ScrollNone
-	c.logScroll = container.NewVScroll(c.logGrid)
 	c.logSelectable = widget.NewMultiLineEntry()
 	c.logSelectable.Wrapping = fyne.TextWrapWord
+	c.logSelectable.Scroll = container.ScrollNone
+	c.logSelectable.TextStyle = fyne.TextStyle{Monospace: true}
 	c.logSelectScroll = container.NewVScroll(c.logSelectable)
-	c.logSelectScroll.Hide()
+	c.logSelectScroll.Direction = container.ScrollVerticalOnly
+	c.logSelectScroll.OnScrolled = func(_ fyne.Position) {
+		if c.followJumping {
+			return
+		}
+		c.setFollowEnabled(c.logAtBottom())
+	}
 	c.followEnabled = true
-	c.logCols = c.logWrapColumns()
-	c.selectableLogs = widget.NewCheck("Selectable text", func(v bool) {
-		if v {
-			c.logScroll.Hide()
-			c.logSelectScroll.Show()
-		} else {
-			c.logSelectScroll.Hide()
-			c.logScroll.Show()
-		}
-		if c.followEnabled {
-			c.scrollLogsToBottom()
-		}
-	})
-
 	c.followButton = widget.NewButton("Following", func() {
 		c.setFollowEnabled(true)
 		c.scrollLogsToBottom()
@@ -725,25 +719,12 @@ func (c *controller) initLogWindow() {
 	c.followButton.Disable()
 	clearButton := widget.NewButton("Clear", func() {
 		c.logRawLines = nil
-		c.logRows = nil
-		c.logGrid.Rows = nil
-		c.logGrid.Refresh()
-		c.scrollLogsToBottom()
+		c.refreshLogView()
 	})
 	c.logWindow = c.app.NewWindow("Sentinel2 Uploader Logs")
 	c.logWindow.Resize(fyne.NewSize(900, 520))
-	centerGap := container.NewHBox(c.debugLogs, c.selectableLogs, layout.NewSpacer())
-	header := container.NewBorder(nil, nil, clearButton, c.followButton, centerGap)
-	logBG := canvas.NewRectangle(color.NRGBA{R: 0, G: 0, B: 0, A: 255})
-	c.logScroll.OnScrolled = func(pos fyne.Position) {
-		if c.followJumping {
-			return
-		}
-		if !c.logAtBottom(pos) {
-			c.setFollowEnabled(false)
-		}
-	}
-	c.logWindow.SetContent(container.NewBorder(header, nil, nil, nil, container.NewMax(logBG, c.logScroll, c.logSelectScroll)))
+	header := container.NewBorder(nil, nil, clearButton, c.followButton, container.NewHBox(c.debugLogs, layout.NewSpacer()))
+	c.logWindow.SetContent(container.NewBorder(header, nil, nil, nil, c.logSelectScroll))
 	c.logWindowOpen = false
 	c.logWindow.SetCloseIntercept(func() {
 		if c.shuttingDown {
@@ -754,7 +735,37 @@ func (c *controller) initLogWindow() {
 		c.refreshTrayMenu()
 	})
 
-	c.watchLogGridWidth()
+	c.startBackgroundLoop("log follow watcher", func(ctx context.Context) {
+		ticker := time.NewTicker(120 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fyne.Do(func() {
+					if !c.logWindowOpen || c.followJumping {
+						return
+					}
+					c.setFollowEnabled(c.logAtBottom())
+				})
+			}
+		}
+	})
+}
+
+func (c *controller) scrollLogsToBottom() {
+	scroll := c.logScrollWidget()
+	if scroll == nil || c.logSelectable == nil {
+		return
+	}
+	maxOffset := c.logMaxOffset(scroll)
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	c.followJumping = true
+	scroll.ScrollToOffset(fyne.NewPos(0, maxOffset))
+	c.followJumping = false
 }
 
 func (c *controller) setFollowEnabled(enabled bool) {
@@ -771,68 +782,76 @@ func (c *controller) setFollowEnabled(enabled bool) {
 	c.followButton.Enable()
 }
 
-func (c *controller) scrollLogsToBottom() {
-	c.followJumping = true
-	if c.selectableLogs != nil && c.selectableLogs.Checked {
-		if c.logSelectScroll != nil {
-			c.logSelectScroll.ScrollToBottom()
-		}
-	} else if c.logScroll != nil {
-		c.logScroll.ScrollToBottom()
-	}
-	c.followJumping = false
-}
-
-func (c *controller) logAtBottom(pos fyne.Position) bool {
-	if c.logScroll == nil || c.logGrid == nil {
+func (c *controller) logAtBottom() bool {
+	scroll := c.logScrollWidget()
+	if scroll == nil || c.logSelectable == nil {
 		return true
 	}
-	contentHeight := c.logGrid.MinSize().Height
-	viewportHeight := c.logScroll.Size().Height
-	if contentHeight <= viewportHeight+1 {
-		return true
-	}
-	return pos.Y+viewportHeight >= contentHeight-1
-}
-
-func (c *controller) watchLogGridWidth() {
-	c.startBackgroundLoop("log wrap watcher", func(ctx context.Context) {
-		ticker := time.NewTicker(250 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				next := c.logWrapColumns()
-				if next == c.logCols {
-					continue
-				}
-				c.logCols = next
-				fyne.Do(func() {
-					c.rebuildLogRows()
-					c.refreshLogView()
-					if c.followEnabled {
-						c.scrollLogsToBottom()
-					}
-				})
-			}
-		}
-	})
+	maxOffset := c.logMaxOffset(scroll)
+	const tolerance = float32(2)
+	return scroll.Offset.Y >= maxOffset-tolerance
 }
 
 func (c *controller) refreshLogView() {
-	if c.logGrid != nil {
-		c.logGrid.Rows = c.logRows
-		c.logGrid.Refresh()
+	if c.logSelectable == nil {
+		return
 	}
-	if c.logSelectable != nil {
-		plain := make([]string, 0, len(c.logRawLines))
-		for _, line := range c.logRawLines {
-			plain = append(plain, stripANSIText(line))
-		}
-		c.logSelectable.SetText(strings.Join(plain, "\n"))
+	scroll := c.logScrollWidget()
+	prevOffset := fyne.Position{}
+	if scroll != nil {
+		prevOffset = scroll.Offset
 	}
+	plain := make([]string, 0, len(c.logRawLines))
+	for _, line := range c.logRawLines {
+		plain = append(plain, stripANSIText(line))
+	}
+	c.logSelectable.SetText(strings.Join(plain, "\n"))
+	if c.followEnabled {
+		c.scrollLogsToBottom()
+		return
+	}
+	if scroll == nil {
+		return
+	}
+	maxOffset := c.logMaxOffset(scroll)
+	targetY := prevOffset.Y
+	if targetY > maxOffset {
+		targetY = maxOffset
+	}
+	c.followJumping = true
+	scroll.ScrollToOffset(fyne.NewPos(0, targetY))
+	c.followJumping = false
+}
+
+func (c *controller) logMaxOffset(scroll *container.Scroll) float32 {
+	if scroll == nil {
+		return 0
+	}
+	contentH := float32(0)
+	if scroll.Content != nil {
+		contentH = scroll.Content.MinSize().Height
+	}
+	if contentH <= 0 && c.logSelectable != nil {
+		contentH = c.logSelectable.MinSize().Height
+	}
+	viewH := scroll.Size().Height
+	maxOffset := contentH - viewH
+	if maxOffset < 0 {
+		return 0
+	}
+	return maxOffset
+}
+
+func (c *controller) logScrollWidget() *container.Scroll {
+	if c.logSelectable == nil {
+		return c.logSelectScroll
+	}
+	// Entry has an internal scroll widget; use it so follow state tracks real user scrolling.
+	v := reflect.ValueOf(c.logSelectable).Elem().FieldByName("scroll")
+	if v.IsValid() && v.Kind() == reflect.Pointer && !v.IsNil() {
+		return (*container.Scroll)(unsafe.Pointer(v.Pointer()))
+	}
+	return c.logSelectScroll
 }
 
 func (c *controller) shouldMinimizeToTrayOnClose() bool {
