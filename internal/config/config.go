@@ -21,16 +21,20 @@ type Options struct {
 }
 
 type APIEndpoints struct {
-	BaseURL          string
-	ConfigURL        string
-	SubmitURL        string
-	RealtimeTokenURL string
-	RealtimeURL      string
+	BaseURL           string
+	ConfigURL         string
+	HeartbeatURL      string
+	SessionRefreshURL string
+	SubmitURL         string
+	RealtimeTokenURL  string
+	RealtimeURL       string
 }
 
 const (
-	realtimeTokenPath = "/uploader/realtime/token"
-	realtimeEventsURL = "/realtime"
+	realtimeTokenPath  = "/uploader/realtime/token"
+	realtimeEventsURL  = "/realtime"
+	heartbeatPath      = "/uploader/heartbeat"
+	sessionRefreshPath = "/uploader/session/refresh"
 )
 
 func ParseOptions(defaultLogDirFn func() string) (Options, error) {
@@ -64,11 +68,13 @@ func BuildEndpoints(rawBaseURL string) (APIEndpoints, error) {
 		return APIEndpoints{}, err
 	}
 	return APIEndpoints{
-		BaseURL:          apiBaseURL,
-		ConfigURL:        apiBaseURL + "/uploader/config",
-		SubmitURL:        apiBaseURL + "/uploader/submit",
-		RealtimeTokenURL: apiBaseURL + realtimeTokenPath,
-		RealtimeURL:      apiBaseURL + realtimeEventsURL,
+		BaseURL:           apiBaseURL,
+		ConfigURL:         apiBaseURL + "/uploader/config",
+		HeartbeatURL:      apiBaseURL + heartbeatPath,
+		SessionRefreshURL: apiBaseURL + sessionRefreshPath,
+		SubmitURL:         apiBaseURL + "/uploader/submit",
+		RealtimeTokenURL:  apiBaseURL + realtimeTokenPath,
+		RealtimeURL:       apiBaseURL + realtimeEventsURL,
 	}, nil
 }
 

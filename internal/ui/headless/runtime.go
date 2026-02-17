@@ -7,6 +7,7 @@ import (
 
 	"sentinel2-uploader/internal/client"
 	"sentinel2-uploader/internal/config"
+	"sentinel2-uploader/internal/runstatus"
 	"sentinel2-uploader/internal/runtime"
 	"sentinel2-uploader/internal/ui/headless/health"
 
@@ -111,17 +112,29 @@ func (m *headlessModel) onRuntimeExit(runErr error) {
 }
 
 func (m *headlessModel) applyRuntimeStatus(status string) {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "authenticated":
-		m.status = "Authenticated"
+	switch runstatus.Key(status) {
+	case runstatus.KeyAuthenticated:
+		m.status = runstatus.Authenticated
 		m.kind = statusConnecting
-	case "channels received":
-		m.status = "Channels received"
+	case runstatus.KeyChannelsReceived:
+		m.status = runstatus.ChannelsReceived
 		m.kind = statusIdle
-	case "connected":
-		m.status = "Connected"
+	case runstatus.KeyConnected:
+		m.status = runstatus.Connected
 		m.kind = statusConnected
 		m.running = true
+		m.connecting = false
+	case runstatus.KeyReconnecting:
+		m.status = runstatus.Reconnecting
+		m.kind = statusConnecting
+		m.connecting = true
+	case runstatus.KeyDisconnected:
+		m.status = runstatus.Disconnected
+		m.kind = statusIdle
+		m.connecting = false
+	case runstatus.KeyDisconnectedAuth:
+		m.status = runstatus.DisconnectedAuth
+		m.kind = statusError
 		m.connecting = false
 	default:
 		m.status = status

@@ -35,6 +35,8 @@ func NewServiceWithHooks(opts config.Options, logger *logging.Logger, hooks Star
 	}
 	logger.Debug("constructed API endpoints",
 		logging.Field("config_url", endpoints.ConfigURL),
+		logging.Field("heartbeat_url", endpoints.HeartbeatURL),
+		logging.Field("session_refresh_url", endpoints.SessionRefreshURL),
 		logging.Field("submit_url", endpoints.SubmitURL),
 		logging.Field("realtime_token_url", endpoints.RealtimeTokenURL),
 		logging.Field("realtime_url", endpoints.RealtimeURL),

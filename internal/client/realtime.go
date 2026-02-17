@@ -14,7 +14,8 @@ import (
 )
 
 type SyncHooks struct {
-	OnConnected func(string)
+	OnConnected    func(string, pbrealtime.Session)
+	OnDisconnected func(error)
 }
 
 func (c *SentinelClient) FetchRealtimeSession(ctx context.Context) (pbrealtime.Session, error) {
@@ -53,9 +54,14 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 
 		// When realtime disconnects, do a direct config fetch so updates can still
 		// propagate while reconnect attempts are backoff-scheduled.
+		prefetchedToken := ""
 		fallbackFetch := func() {
 			c.logger.Debug("running fallback channel refresh")
-			channels, fetchErr := c.FetchChannels(ctx)
+			if prefetchedToken == "" {
+				c.logger.Debug("skipping fallback channel refresh: no active session token")
+				return
+			}
+			channels, fetchErr := c.FetchChannels(ctx, prefetchedToken)
 			if fetchErr != nil {
 				c.logger.Warn("fallback channel refresh failed", logging.Field("error", fetchErr))
 				return
@@ -78,9 +84,17 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 			if useInitialSession && initialSession != nil {
 				s := *initialSession
 				prefetched = &s
+				prefetchedToken = s.Token
 				useInitialSession = false
 			}
-			err := c.runRealtimeConfigSession(ctx, pushUpdate, hooks, prefetched)
+			runHooks := hooks
+			runHooks.OnConnected = func(topic string, session pbrealtime.Session) {
+				prefetchedToken = session.Token
+				if hooks.OnConnected != nil {
+					hooks.OnConnected(topic, session)
+				}
+			}
+			err := c.runRealtimeConfigSession(ctx, pushUpdate, runHooks, prefetched)
 			if err == nil {
 				return struct{}{}, nil
 			}
@@ -160,13 +174,15 @@ func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate 
 		Logger:      c.logger,
 	}
 
+	connected := false
 	// StreamClient owns PB_CONNECT + subscribe + SSE transport details.
 	// This layer only handles uploader-specific payload decoding and update apply.
-	return stream.RunSession(ctx, session, auth.Subscribe, pbrealtime.SessionHandlers{
+	runErr := stream.RunSession(ctx, session, auth.Subscribe, pbrealtime.SessionHandlers{
 		OnConnected: func(topic string) {
 			c.logger.Info("realtime config stream connected", logging.Field("topic", topic))
+			connected = true
 			if hooks.OnConnected != nil {
-				hooks.OnConnected(topic)
+				hooks.OnConnected(topic, session)
 			}
 		},
 		OnMessage: func(event pbrealtime.Event) {
@@ -190,4 +206,8 @@ func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate 
 			)
 		},
 	})
+	if connected && hooks.OnDisconnected != nil {
+		hooks.OnDisconnected(runErr)
+	}
+	return runErr
 }

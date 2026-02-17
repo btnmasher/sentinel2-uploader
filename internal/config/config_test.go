@@ -29,6 +29,12 @@ func TestBuildEndpoints_NormalizeAPIBaseURL(t *testing.T) {
 			if endpoints.RealtimeTokenURL != tt.want+"/uploader/realtime/token" {
 				t.Fatalf("RealtimeTokenURL = %q", endpoints.RealtimeTokenURL)
 			}
+			if endpoints.HeartbeatURL != tt.want+"/uploader/heartbeat" {
+				t.Fatalf("HeartbeatURL = %q", endpoints.HeartbeatURL)
+			}
+			if endpoints.SessionRefreshURL != tt.want+"/uploader/session/refresh" {
+				t.Fatalf("SessionRefreshURL = %q", endpoints.SessionRefreshURL)
+			}
 		})
 	}
 }

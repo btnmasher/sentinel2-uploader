@@ -18,8 +18,8 @@ func TestSubmit_SetsHeadersAndPayload(t *testing.T) {
 			if got := r.Method; got != http.MethodPut {
 				t.Fatalf("method = %q, want PUT", got)
 			}
-			if got := r.Header.Get("X-Uploader-Token"); got != "token-123" {
-				t.Fatalf("X-Uploader-Token = %q, want token-123", got)
+			if got := r.Header.Get("Authorization"); got != "Bearer session-123" {
+				t.Fatalf("Authorization = %q, want Bearer session-123", got)
 			}
 			if got := r.Header.Get("Content-Type"); got != "application/json" {
 				t.Fatalf("Content-Type = %q, want application/json", got)
@@ -47,7 +47,7 @@ func TestSubmit_SetsHeadersAndPayload(t *testing.T) {
 		config.APIEndpoints{SubmitURL: "https://example.test/uploader/submit"},
 		logging.New(false),
 	)
-	if err := c.Submit(context.Background(), SubmitPayload{ChannelID: "abc", Text: "report text"}); err != nil {
+	if err := c.Submit(context.Background(), SubmitPayload{ChannelID: "abc", Text: "report text"}, "session-123"); err != nil {
 		t.Fatalf("Submit() error = %v", err)
 	}
 }
@@ -71,7 +71,7 @@ func TestSubmit_ReturnsErrorOnHTTPFailure(t *testing.T) {
 		config.APIEndpoints{SubmitURL: "https://example.test/uploader/submit"},
 		logging.New(false),
 	)
-	if err := c.Submit(context.Background(), SubmitPayload{ChannelID: "abc", Text: "report text"}); err == nil {
+	if err := c.Submit(context.Background(), SubmitPayload{ChannelID: "abc", Text: "report text"}, "session-123"); err == nil {
 		t.Fatalf("Submit() expected error for HTTP status >= 400")
 	}
 }

@@ -38,8 +38,8 @@ func TestNormalizeChannels_DedupesSortsAndTrims(t *testing.T) {
 func TestFetchChannels_SetsTokenHeaderAndNormalizesResponse(t *testing.T) {
 	httpClient := &http.Client{
 		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			if got := r.Header.Get("X-Uploader-Token"); got != "token-123" {
-				t.Fatalf("X-Uploader-Token = %q, want token-123", got)
+			if got := r.Header.Get("Authorization"); got != "Bearer session-123" {
+				t.Fatalf("Authorization = %q, want Bearer session-123", got)
 			}
 			body, _ := json.Marshal(map[string]any{
 				"channels": []map[string]string{
@@ -66,7 +66,7 @@ func TestFetchChannels_SetsTokenHeaderAndNormalizesResponse(t *testing.T) {
 		logging.New(false),
 	)
 
-	got, err := c.FetchChannels(context.Background())
+	got, err := c.FetchChannels(context.Background(), "session-123")
 	if err != nil {
 		t.Fatalf("FetchChannels() error = %v", err)
 	}
@@ -98,7 +98,7 @@ func TestFetchChannels_HTTPErrorAndInvalidJSON(t *testing.T) {
 		config.APIEndpoints{ConfigURL: "https://example.test/uploader/config"},
 		logging.New(false),
 	)
-	if _, err := c1.FetchChannels(context.Background()); err == nil {
+	if _, err := c1.FetchChannels(context.Background(), "session-123"); err == nil {
 		t.Fatalf("FetchChannels() expected error on HTTP status >= 400")
 	}
 
@@ -120,7 +120,7 @@ func TestFetchChannels_HTTPErrorAndInvalidJSON(t *testing.T) {
 		config.APIEndpoints{ConfigURL: "https://example.test/uploader/config"},
 		logging.New(false),
 	)
-	if _, err := c2.FetchChannels(context.Background()); err == nil {
+	if _, err := c2.FetchChannels(context.Background(), "session-123"); err == nil {
 		t.Fatalf("FetchChannels() expected error on invalid JSON")
 	}
 }

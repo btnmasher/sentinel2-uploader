@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -12,13 +11,17 @@ import (
 	"sentinel2-uploader/internal/logging"
 )
 
-func (c *SentinelClient) FetchChannels(ctx context.Context) ([]ChannelConfig, error) {
+func (c *SentinelClient) FetchChannels(ctx context.Context, sessionToken string) ([]ChannelConfig, error) {
+	token := strings.TrimSpace(sessionToken)
+	if token == "" {
+		return nil, &HTTPStatusError{StatusCode: http.StatusUnauthorized, Status: "missing uploader realtime session token"}
+	}
 	c.logger.Debug("fetching channel config", logging.Field("url", c.endpoints.ConfigURL))
 	req, err := http.NewRequestWithContext(ctx, "GET", c.endpoints.ConfigURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Uploader-Token", c.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -35,7 +38,7 @@ func (c *SentinelClient) FetchChannels(ctx context.Context) ([]ChannelConfig, er
 			logging.Field("content_type", resp.Header.Get("Content-Type")),
 			logging.Field("response", body),
 		)
-		return nil, fmt.Errorf("config request failed: %s", resp.Status)
+		return nil, &HTTPStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 
 	var cfg uploaderConfigResponse
@@ -47,7 +50,7 @@ func (c *SentinelClient) FetchChannels(ctx context.Context) ([]ChannelConfig, er
 			logging.Field("error", err),
 			logging.Field("response", body),
 		)
-		return nil, fmt.Errorf("invalid config JSON from %s: %w", c.endpoints.ConfigURL, err)
+		return nil, err
 	}
 
 	out := []ChannelConfig{}

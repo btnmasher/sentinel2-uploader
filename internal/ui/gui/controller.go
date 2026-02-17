@@ -24,6 +24,7 @@ import (
 	"sentinel2-uploader/internal/config"
 	"sentinel2-uploader/internal/evelogs"
 	"sentinel2-uploader/internal/logging"
+	"sentinel2-uploader/internal/runstatus"
 	"sentinel2-uploader/internal/runtime"
 )
 
@@ -528,13 +529,19 @@ func (c *controller) hoverTooltipPosition(anchor fyne.Position, size fyne.Size) 
 }
 
 func (c *controller) applyRuntimeStatus(status string) {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "authenticated":
-		c.setStatus("Authenticated", statusConnectingColor)
-	case "channels received":
-		c.setStatus("Channels received", statusChannelsColor)
-	case "connected":
-		c.setStatus("Connected", statusRunningColor)
+	switch runstatus.Key(status) {
+	case runstatus.KeyAuthenticated:
+		c.setStatus(runstatus.Authenticated, statusConnectingColor)
+	case runstatus.KeyChannelsReceived:
+		c.setStatus(runstatus.ChannelsReceived, statusChannelsColor)
+	case runstatus.KeyConnected:
+		c.setStatus(runstatus.Connected, statusRunningColor)
+	case runstatus.KeyReconnecting:
+		c.setStatus(runstatus.Reconnecting, statusConnectingColor)
+	case runstatus.KeyDisconnected:
+		c.setStatus(runstatus.Disconnected, statusIdleColor)
+	case runstatus.KeyDisconnectedAuth:
+		c.setStatus(runstatus.DisconnectedAuth, statusErrorColor)
 	default:
 		c.setStatus(status, statusIdleColor)
 	}
