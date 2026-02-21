@@ -410,5 +410,11 @@ tasks:
           echo "Install zig from https://ziglang.org/download/" >&2
           exit 1
         fi
-        zig version
+        REQUIRED="$(cat .zig-version)"
+        ACTUAL="$(zig version)"
+        if [ "$ACTUAL" != "$REQUIRED" ]; then
+          echo "zig version mismatch: expected $REQUIRED, found $ACTUAL" >&2
+          exit 1
+        fi
+        echo "$ACTUAL"
     desc: Ensure zig is installed.

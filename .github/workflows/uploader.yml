@@ -9,6 +9,7 @@ on:
       - "Taskfile.yml"
       - ".golangci.yml"
       - ".golangci-lint-version"
+      - ".zig-version"
       - ".github/workflows/uploader.yml"
   push:
     branches:
@@ -20,6 +21,7 @@ on:
       - "Taskfile.yml"
       - ".golangci.yml"
       - ".golangci-lint-version"
+      - ".zig-version"
       - ".github/workflows/uploader.yml"
   workflow_dispatch:
 
