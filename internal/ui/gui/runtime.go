@@ -16,11 +16,15 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
+	uploaderapp "sentinel2-uploader/internal/app"
 	"sentinel2-uploader/internal/client"
 	"sentinel2-uploader/internal/config"
 	"sentinel2-uploader/internal/logging"
 	"sentinel2-uploader/internal/runtime"
 )
+
+const debugLogsHint = "Check Debug Logs for details."
+const forceQuitTimeout = 4 * time.Second
 
 func waitGroupWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 	done := make(chan struct{})
@@ -40,6 +44,27 @@ func waitGroupWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 	case <-timer.C:
 		return false
 	}
+}
+
+func userFacingRuntimeError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	message := "Uploader disconnected due to a connection error."
+
+	switch {
+	case errors.Is(err, uploaderapp.ErrAuthenticationFailed):
+		message = "Authentication failed. Please check your credentials."
+	case errors.Is(err, uploaderapp.ErrRealtimeReconnectExhausted):
+		message = "Lost connection to Sentinel for too long and stopped reconnecting."
+	case errors.Is(err, uploaderapp.ErrStartupRealtimeConnect):
+		message = "Could not establish an authenticated connection."
+	case errors.Is(err, uploaderapp.ErrRealtimeHandshakeTimeout):
+		message = "Connected to Sentinel, but realtime subscription did not complete in time."
+	}
+
+	return errors.New(message + "\n\n" + debugLogsHint)
 }
 
 func (c *controller) startBackgroundLoop(name string, fn func(context.Context)) {
@@ -157,7 +182,7 @@ func (c *controller) startUploaderWithContext(auto bool) {
 				}
 				if runErr != nil {
 					c.setStatus("Disconnected", statusErrorColor)
-					dialog.ShowError(runErr, c.win)
+					dialog.ShowError(userFacingRuntimeError(runErr), c.win)
 					return
 				}
 				c.setStatus("Idle", statusIdleColor)
@@ -339,6 +364,14 @@ func (c *controller) quitApp() {
 		c.logger.Debug("quit requested")
 		c.cleanup()
 		c.logger.Debug("calling fyne app quit")
+		go func() {
+			select {
+			case <-c.appStopped:
+			case <-time.After(forceQuitTimeout):
+				c.logger.Warn("fyne app quit timed out; forcing process exit")
+				os.Exit(0)
+			}
+		}()
 		c.app.Quit()
 	})
 }

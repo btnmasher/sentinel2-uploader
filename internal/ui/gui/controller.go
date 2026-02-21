@@ -114,6 +114,8 @@ type controller struct {
 
 	cleanupOnce    sync.Once
 	quitOnce       sync.Once
+	appStoppedOnce sync.Once
+	appStopped     chan struct{}
 	bgWG           sync.WaitGroup
 	unsubscribe    func()
 	appCtx         context.Context
@@ -169,6 +171,7 @@ func newController(rootCtx context.Context, uiApp fyne.App, defaults config.Opti
 		runner:       runtime.NewController(appCtx),
 		appCtx:       appCtx,
 		appCancel:    appCancel,
+		appStopped:   make(chan struct{}),
 		dismissedTag: strings.TrimSpace(settings.LastDismissedUpdateTag),
 	}
 
@@ -181,6 +184,9 @@ func newController(rootCtx context.Context, uiApp fyne.App, defaults config.Opti
 	c.setupTray()
 	c.app.Lifecycle().SetOnStopped(func() {
 		c.logger.Debug("app lifecycle OnStopped hook triggered")
+		c.appStoppedOnce.Do(func() {
+			close(c.appStopped)
+		})
 		c.cleanup()
 	})
 	return c
@@ -209,6 +215,11 @@ func (c *controller) run() {
 		c.cleanup()
 	})
 	c.win.SetCloseIntercept(func() {
+		if c.shuttingDown {
+			c.win.SetCloseIntercept(nil)
+			c.win.Close()
+			return
+		}
 		c.logger.Debug("main window CloseIntercept hook triggered",
 			logging.Field("minimize_to_tray", c.shouldMinimizeToTrayOnClose()),
 		)
@@ -737,6 +748,8 @@ func (c *controller) initLogWindow() {
 	c.logWindowOpen = false
 	c.logWindow.SetCloseIntercept(func() {
 		if c.shuttingDown {
+			c.logWindow.SetCloseIntercept(nil)
+			c.logWindow.Close()
 			return
 		}
 		c.logWindowOpen = false

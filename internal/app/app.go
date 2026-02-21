@@ -29,6 +29,37 @@ type UploaderApp struct {
 	status runtimeStatusState
 }
 
+type connectionEventKind string
+
+type connectionEvent struct {
+	kind             connectionEventKind
+	epoch            uint64
+	hasRealtimeEpoch bool
+}
+
+const (
+	connectionEventAuthenticated        connectionEventKind = "authenticated"
+	connectionEventChannelsReceived     connectionEventKind = "channels_received"
+	connectionEventRealtimeConnected    connectionEventKind = "realtime_connected"
+	connectionEventRealtimeDisconnected connectionEventKind = "realtime_disconnected"
+	connectionEventAPISuccess           connectionEventKind = "api_success"
+	connectionEventReconnectExhausted   connectionEventKind = "reconnect_exhausted"
+	connectionEventAuthFailed           connectionEventKind = "auth_failed"
+	connectionEventStopped              connectionEventKind = "stopped"
+)
+
+func newConnectionEvent(kind connectionEventKind) connectionEvent {
+	return connectionEvent{kind: kind}
+}
+
+func newRealtimeEpochEvent(kind connectionEventKind, epoch uint64) connectionEvent {
+	return connectionEvent{
+		kind:             kind,
+		epoch:            epoch,
+		hasRealtimeEpoch: true,
+	}
+}
+
 type Callbacks struct {
 	OnChannelsUpdate func([]client.ChannelConfig)
 	OnStatusChange   func(string)
@@ -53,12 +84,31 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 	defer runCancel()
 
 	var authShutdown atomic.Bool
+	var stopReasonMu sync.Mutex
+	var stopReason error
+	setStopReason := func(err error) {
+		if err == nil {
+			return
+		}
+		stopReasonMu.Lock()
+		defer stopReasonMu.Unlock()
+		if stopReason == nil {
+			stopReason = err
+		}
+	}
+	getStopReason := func() error {
+		stopReasonMu.Lock()
+		defer stopReasonMu.Unlock()
+		return stopReason
+	}
+
 	stopForAuth := func(cause error) {
 		if !authShutdown.CompareAndSwap(false, true) {
 			return
 		}
 		a.logger.Warn("stopping uploader due to authentication failure", logging.Field("error", cause))
-		a.setRuntimeStatus(runstatus.DisconnectedAuth)
+		a.applyConnectionEvent(newConnectionEvent(connectionEventAuthFailed))
+		setStopReason(fmt.Errorf("%w: %w", ErrAuthenticationFailed, cause))
 		runCancel()
 	}
 
@@ -74,12 +124,12 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 	session, err := a.client.FetchRealtimeSession(runCtx)
 	if err != nil {
 		if client.IsUnauthorized(err) {
-			stopForAuth(err)
-			return nil
+			a.applyConnectionEvent(newConnectionEvent(connectionEventAuthFailed))
+			return fmt.Errorf("%w: %w", ErrAuthenticationFailed, err)
 		}
-		return fmt.Errorf("failed to authenticate realtime session: %w", err)
+		return fmt.Errorf("%w: %w", ErrStartupRealtimeConnect, err)
 	}
-	a.setRuntimeStatus(runstatus.Authenticated)
+	a.applyConnectionEvent(newConnectionEvent(connectionEventAuthenticated))
 
 	sessionState := sessionState{}
 	sessionState.setSessionToken(session.Token)
@@ -88,7 +138,7 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch channels: %w", err)
 	}
-	a.setRuntimeStatus(runstatus.ChannelsReceived)
+	a.applyConnectionEvent(newConnectionEvent(connectionEventChannelsReceived))
 	if len(channels) == 0 {
 		return fmt.Errorf("no channels configured")
 	}
@@ -115,26 +165,39 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 
 	connected := make(chan struct{}, 1)
 	configUpdates := a.client.StartChannelConfigSync(runCtx, channels, client.SyncHooks{
-		OnConnected: func(topic string, session pbrealtime.Session) {
+		OnConnected: func(topic string, session pbrealtime.Session, epoch uint64) {
 			sessionState.setConnectedSession(session.Token)
-			a.setRuntimeStatus(runstatus.Connected)
+			a.applyConnectionEvent(newRealtimeEpochEvent(connectionEventRealtimeConnected, epoch))
 			select {
 			case connected <- struct{}{}:
 			default:
 			}
 		},
-		OnDisconnected: func(err error) {
+		OnDisconnected: func(err error, epoch uint64) {
 			sessionState.clearConnection()
 			if runCtx.Err() == nil {
+				if err == nil {
+					a.logger.Debug("ignoring reconnect status transition: realtime disconnected without an error")
+					return
+				}
 				if client.IsUnauthorized(err) {
-					a.setRuntimeStatus(runstatus.DisconnectedAuth)
+					a.applyConnectionEvent(newConnectionEvent(connectionEventAuthFailed))
 				} else {
-					a.setRuntimeStatus(runstatus.Reconnecting)
+					a.applyConnectionEvent(newRealtimeEpochEvent(connectionEventRealtimeDisconnected, epoch))
 				}
 			}
 			if err != nil && runCtx.Err() == nil {
 				a.logger.Debug("realtime channel stream disconnected", logging.Field("error", err))
 			}
+		},
+		OnStopped: func(err error) {
+			if runCtx.Err() != nil {
+				return
+			}
+			a.logger.Warn("realtime channel sync retries exhausted", logging.Field("error", err))
+			a.applyConnectionEvent(newConnectionEvent(connectionEventReconnectExhausted))
+			setStopReason(fmt.Errorf("%w: %w", ErrRealtimeReconnectExhausted, err))
+			runCancel()
 		},
 		OnAuthFailure: stopForAuth,
 	}, &session)
@@ -150,24 +213,29 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 		} else {
 			a.logger.Debug("startup handshake wait expired", logging.Field("error", waitCtx.Err()))
 		}
-		return fmt.Errorf("realtime subscribe handshake timeout: %w", waitCtx.Err())
+		return fmt.Errorf("%w: %w", ErrRealtimeHandshakeTimeout, waitCtx.Err())
 	case <-connected:
-		a.setRuntimeStatus(runstatus.Connected)
+		// OnConnected already applies state with epoch; this path only gates startup.
 	}
 
 	go a.runHeartbeatLoop(runCtx, &sessionState, stopForAuth)
 
 	runErr := monitor.RunContext(runCtx, monitorUpdates)
-	if authShutdown.Load() {
-		a.logger.Info("uploader app stopped due to authentication failure")
-		return nil
+	if reason := getStopReason(); reason != nil {
+		a.applyConnectionEvent(newConnectionEvent(connectionEventStopped))
+		if authShutdown.Load() {
+			a.logger.Warn("uploader app stopped due to authentication failure", logging.Field("error", reason))
+		} else {
+			a.logger.Warn("uploader app stopped after reconnect exhaustion", logging.Field("error", reason))
+		}
+		return reason
 	}
 	if runErr != nil {
-		a.setRuntimeStatus(runstatus.Disconnected)
+		a.applyConnectionEvent(newConnectionEvent(connectionEventStopped))
 		a.logger.Warn("uploader app stopped with error", logging.Field("error", runErr))
 		return runErr
 	}
-	a.setRuntimeStatus(runstatus.Disconnected)
+	a.applyConnectionEvent(newConnectionEvent(connectionEventStopped))
 	a.logger.Info("uploader app stopped")
 	return nil
 }
@@ -179,20 +247,100 @@ type sessionState struct {
 }
 
 type runtimeStatusState struct {
-	mu      sync.Mutex
-	current string
+	mu                sync.Mutex
+	current           string
+	authFailed        bool
+	realtimeConnected bool
+	stopped           bool
+	realtimeEpoch     uint64
 }
 
-func (s *runtimeStatusState) update(status string) (string, string, bool) {
-	trimmed := strings.TrimSpace(status)
+func (s *runtimeStatusState) apply(event connectionEvent) (string, string, bool) {
+	next := strings.TrimSpace(s.current)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.current == trimmed {
-		return s.current, trimmed, false
+	switch event.kind {
+	case connectionEventAuthenticated:
+		s.authFailed = false
+		s.stopped = false
+		s.realtimeConnected = false
+		s.realtimeEpoch = 0
+		if !s.realtimeConnected {
+			next = runstatus.Authenticated
+		}
+	case connectionEventChannelsReceived:
+		if s.authFailed || s.stopped {
+			break
+		}
+		if s.realtimeConnected {
+			next = runstatus.Connected
+		} else {
+			next = runstatus.ChannelsReceived
+		}
+	case connectionEventRealtimeConnected:
+		if s.authFailed || s.stopped {
+			break
+		}
+		if !event.hasRealtimeEpoch {
+			break
+		}
+		if event.epoch < s.realtimeEpoch {
+			break
+		}
+		s.realtimeEpoch = event.epoch
+		s.realtimeConnected = true
+		next = runstatus.Connected
+	case connectionEventRealtimeDisconnected:
+		if s.authFailed || s.stopped {
+			break
+		}
+		if !event.hasRealtimeEpoch {
+			break
+		}
+		if event.epoch < s.realtimeEpoch {
+			break
+		}
+		s.realtimeEpoch = event.epoch
+		s.realtimeConnected = false
+		next = runstatus.Reconnecting
+	case connectionEventAPISuccess:
+		if s.authFailed || s.stopped {
+			break
+		}
+		next = runstatus.Connected
+	case connectionEventReconnectExhausted:
+		if s.authFailed || s.stopped {
+			break
+		}
+		s.realtimeConnected = false
+		next = runstatus.Disconnected
+	case connectionEventAuthFailed:
+		s.authFailed = true
+		s.realtimeConnected = false
+		s.stopped = true
+		next = runstatus.DisconnectedAuth
+	case connectionEventStopped:
+		s.stopped = true
+		s.realtimeConnected = false
+		if s.authFailed {
+			next = runstatus.DisconnectedAuth
+		} else {
+			next = runstatus.Disconnected
+		}
+	}
+
+	if s.current == next {
+		return s.current, next, false
 	}
 	previous := s.current
-	s.current = trimmed
-	return previous, trimmed, true
+	s.current = next
+	return previous, next, true
+}
+
+func (s *runtimeStatusState) key() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return runstatus.Key(s.current)
 }
 
 func (s *sessionState) setConnectedSession(token string) {
@@ -239,6 +387,9 @@ func (a *UploaderApp) withSessionRetry(ctx context.Context, state *sessionState,
 	}
 	err := call(token)
 	if !client.IsUnauthorized(err) {
+		if err == nil {
+			a.markConnectionHealthy()
+		}
 		return err
 	}
 
@@ -253,7 +404,7 @@ func (a *UploaderApp) withSessionRetry(ctx context.Context, state *sessionState,
 		if fetchErr != nil {
 			if client.IsUnauthorized(fetchErr) {
 				state.clearConnection()
-				a.setRuntimeStatus(runstatus.DisconnectedAuth)
+				a.applyConnectionEvent(newConnectionEvent(connectionEventAuthFailed))
 				if onAuthFailure != nil {
 					onAuthFailure(fetchErr)
 				}
@@ -264,7 +415,19 @@ func (a *UploaderApp) withSessionRetry(ctx context.Context, state *sessionState,
 	}
 
 	state.setSessionToken(refreshed.Token)
-	return call(refreshed.Token)
+	retryErr := call(refreshed.Token)
+	if retryErr == nil {
+		a.markConnectionHealthy()
+	}
+	return retryErr
+}
+
+func (a *UploaderApp) markConnectionHealthy() {
+	key := a.status.key()
+	if key == runstatus.KeyDisconnected || key == runstatus.KeyDisconnectedAuth {
+		return
+	}
+	a.applyConnectionEvent(newConnectionEvent(connectionEventAPISuccess))
 }
 
 func (a *UploaderApp) runHeartbeatLoop(ctx context.Context, state *sessionState, onAuthFailure func(error)) {
@@ -352,14 +515,16 @@ func (a *UploaderApp) notifyStatus(status string) {
 	a.hooks.OnStatusChange(status)
 }
 
-func (a *UploaderApp) setRuntimeStatus(status string) {
-	previous, next, changed := a.status.update(status)
+func (a *UploaderApp) applyConnectionEvent(event connectionEvent) {
+	previous, next, changed := a.status.apply(event)
 	if !changed {
 		return
 	}
 	a.logger.Debug("runtime status transition",
+		logging.Field("event", string(event.kind)),
+		logging.Field("realtime_epoch", event.epoch),
 		logging.Field("from", previous),
 		logging.Field("to", next),
 	)
-	a.notifyStatus(status)
+	a.notifyStatus(next)
 }

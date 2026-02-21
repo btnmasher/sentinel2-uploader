@@ -189,3 +189,107 @@ func TestWithSessionRetry_LongLivedUnauthorizedTriggersAuthFailureAndDisconnect(
 		t.Fatalf("expected status transition to %q, got %v", runstatus.DisconnectedAuth, statuses)
 	}
 }
+
+func TestWithSessionRetry_SuccessPromotesReconnectingToConnected(t *testing.T) {
+	logger := logging.New(false)
+	logger.SetTerminalOutputEnabled(false)
+
+	statuses := make([]string, 0, 2)
+	app := New(config.Options{}, &client.SentinelClient{}, logger, Callbacks{
+		OnStatusChange: func(status string) {
+			statuses = append(statuses, status)
+		},
+	})
+
+	app.applyConnectionEvent(newConnectionEvent(connectionEventAuthenticated))
+	app.applyConnectionEvent(newConnectionEvent(connectionEventChannelsReceived))
+	app.applyConnectionEvent(newRealtimeEpochEvent(connectionEventRealtimeDisconnected, 1))
+	state := &sessionState{}
+	state.setSessionToken("short-ok")
+
+	callErr := app.withSessionRetry(context.Background(), state, func(token string) error {
+		if token != "short-ok" {
+			t.Fatalf("token = %q, want short-ok", token)
+		}
+		return nil
+	}, nil)
+	if callErr != nil {
+		t.Fatalf("withSessionRetry() error = %v, want nil", callErr)
+	}
+
+	if got := app.status.key(); got != runstatus.KeyConnected {
+		t.Fatalf("status key = %q, want %q", got, runstatus.KeyConnected)
+	}
+	foundConnected := false
+	for _, status := range statuses {
+		if status == runstatus.Connected {
+			foundConnected = true
+			break
+		}
+	}
+	if !foundConnected {
+		t.Fatalf("expected status transition to %q, got %v", runstatus.Connected, statuses)
+	}
+}
+
+func TestRuntimeStatusState_AuthFailureIsTerminalForSuccessSignals(t *testing.T) {
+	var state runtimeStatusState
+
+	state.apply(newConnectionEvent(connectionEventAuthenticated))
+	state.apply(newConnectionEvent(connectionEventChannelsReceived))
+	state.apply(newRealtimeEpochEvent(connectionEventRealtimeConnected, 1))
+	state.apply(newConnectionEvent(connectionEventAuthFailed))
+	state.apply(newConnectionEvent(connectionEventAPISuccess))
+	state.apply(newRealtimeEpochEvent(connectionEventRealtimeConnected, 2))
+
+	if got := state.key(); got != runstatus.KeyDisconnectedAuth {
+		t.Fatalf("status key = %q, want %q", got, runstatus.KeyDisconnectedAuth)
+	}
+}
+
+func TestRuntimeStatusState_ReconnectThenAPISuccessReturnsConnected(t *testing.T) {
+	var state runtimeStatusState
+
+	state.apply(newConnectionEvent(connectionEventAuthenticated))
+	state.apply(newConnectionEvent(connectionEventChannelsReceived))
+	state.apply(newRealtimeEpochEvent(connectionEventRealtimeConnected, 1))
+	state.apply(newRealtimeEpochEvent(connectionEventRealtimeDisconnected, 1))
+	if got := state.key(); got != runstatus.KeyReconnecting {
+		t.Fatalf("status key = %q, want %q", got, runstatus.KeyReconnecting)
+	}
+
+	state.apply(newConnectionEvent(connectionEventAPISuccess))
+	if got := state.key(); got != runstatus.KeyConnected {
+		t.Fatalf("status key = %q, want %q", got, runstatus.KeyConnected)
+	}
+}
+
+func TestRuntimeStatusState_StaleDisconnectEpochIgnored(t *testing.T) {
+	var state runtimeStatusState
+
+	state.apply(newConnectionEvent(connectionEventAuthenticated))
+	state.apply(newConnectionEvent(connectionEventChannelsReceived))
+	state.apply(newRealtimeEpochEvent(connectionEventRealtimeConnected, 2))
+	state.apply(newRealtimeEpochEvent(connectionEventRealtimeDisconnected, 1))
+
+	if got := state.key(); got != runstatus.KeyConnected {
+		t.Fatalf("status key = %q, want %q", got, runstatus.KeyConnected)
+	}
+}
+
+func TestRuntimeStatusState_ReconnectExhaustedBecomesDisconnected(t *testing.T) {
+	var state runtimeStatusState
+
+	state.apply(newConnectionEvent(connectionEventAuthenticated))
+	state.apply(newConnectionEvent(connectionEventChannelsReceived))
+	state.apply(newRealtimeEpochEvent(connectionEventRealtimeConnected, 1))
+	state.apply(newRealtimeEpochEvent(connectionEventRealtimeDisconnected, 1))
+	if got := state.key(); got != runstatus.KeyReconnecting {
+		t.Fatalf("status key = %q, want %q", got, runstatus.KeyReconnecting)
+	}
+
+	state.apply(newConnectionEvent(connectionEventReconnectExhausted))
+	if got := state.key(); got != runstatus.KeyDisconnected {
+		t.Fatalf("status key = %q, want %q", got, runstatus.KeyDisconnected)
+	}
+}

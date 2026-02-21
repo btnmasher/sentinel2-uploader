@@ -14,8 +14,9 @@ import (
 )
 
 type SyncHooks struct {
-	OnConnected    func(string, pbrealtime.Session)
-	OnDisconnected func(error)
+	OnConnected    func(string, pbrealtime.Session, uint64)
+	OnDisconnected func(error, uint64)
+	OnStopped      func(error)
 	OnAuthFailure  func(error)
 }
 
@@ -79,7 +80,10 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 		retry.Reset()
 
 		useInitialSession := initialSession != nil
+		var sessionEpoch uint64
 		_, retryErr := backoff.Retry(ctx, func() (struct{}, error) {
+			sessionEpoch++
+			attemptEpoch := sessionEpoch
 			// Session blocks while connected; returns when disconnected/expired.
 			var prefetched *pbrealtime.Session
 			if useInitialSession && initialSession != nil {
@@ -89,20 +93,20 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 				useInitialSession = false
 			}
 			runHooks := hooks
-			runHooks.OnConnected = func(topic string, session pbrealtime.Session) {
+			runHooks.OnConnected = func(topic string, session pbrealtime.Session, _ uint64) {
 				prefetchedToken = session.Token
 				if hooks.OnConnected != nil {
-					hooks.OnConnected(topic, session)
+					hooks.OnConnected(topic, session, attemptEpoch)
 				}
 			}
-			err := c.runRealtimeConfigSession(ctx, pushUpdate, runHooks, prefetched)
+			err := c.runRealtimeConfigSession(ctx, pushUpdate, runHooks, prefetched, attemptEpoch)
 			if err == nil {
 				return struct{}{}, nil
 			}
 
 			if IsUnauthorized(err) {
 				if hooks.OnDisconnected != nil {
-					hooks.OnDisconnected(err)
+					hooks.OnDisconnected(err, attemptEpoch)
 				}
 				if hooks.OnAuthFailure != nil {
 					hooks.OnAuthFailure(err)
@@ -126,6 +130,7 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 			return struct{}{}, err
 		},
 			backoff.WithBackOff(retry),
+			backoff.WithMaxElapsedTime(reconnectMaxElapsed),
 			backoff.WithNotify(func(err error, next time.Duration) {
 				c.logger.Debug("retrying realtime channel sync",
 					logging.Field("error", err),
@@ -134,6 +139,9 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 		)
 		if retryErr != nil && !errors.Is(retryErr, context.Canceled) && !errors.Is(retryErr, context.DeadlineExceeded) {
 			c.logger.Warn("realtime channel sync stopped", logging.Field("error", retryErr))
+			if hooks.OnStopped != nil {
+				hooks.OnStopped(retryErr)
+			}
 			return
 		}
 
@@ -151,7 +159,7 @@ func isExpectedRealtimeReconnect(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, pbrealtime.ErrSessionRefreshDue)
 }
 
-func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate func([]ChannelConfig), hooks SyncHooks, prefetched *pbrealtime.Session) error {
+func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate func([]ChannelConfig), hooks SyncHooks, prefetched *pbrealtime.Session, epoch uint64) error {
 	// Acquire short-lived realtime credentials scoped to uploader subscriptions.
 	auth := pbrealtime.AuthClient{
 		HTTP:             c.http,
@@ -193,7 +201,7 @@ func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate 
 			c.logger.Info("realtime config stream connected", logging.Field("topic", topic))
 			connected = true
 			if hooks.OnConnected != nil {
-				hooks.OnConnected(topic, session)
+				hooks.OnConnected(topic, session, epoch)
 			}
 		},
 		OnMessage: func(event pbrealtime.Event) {
@@ -222,12 +230,12 @@ func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate 
 		refreshed, refreshErr := c.RefreshSession(ctx, session.Token)
 		if refreshErr == nil {
 			c.logger.Info("realtime short session refresh succeeded; reconnecting stream")
-			return c.runRealtimeConfigSession(ctx, onUpdate, hooks, &refreshed)
+			return c.runRealtimeConfigSession(ctx, onUpdate, hooks, &refreshed, epoch)
 		}
 		c.logger.Warn("realtime short session refresh failed", logging.Field("error", refreshErr))
 	}
 	if connected && hooks.OnDisconnected != nil {
-		hooks.OnDisconnected(runErr)
+		hooks.OnDisconnected(runErr, epoch)
 	}
 	return runErr
 }

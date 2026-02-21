@@ -12,6 +12,7 @@ const (
 	realtimeRefreshLead = 10 * time.Second
 	reconnectDelay      = 5 * time.Second
 	reconnectMaxDelay   = 30 * time.Second
+	reconnectMaxElapsed = 1 * time.Minute
 )
 
 type SentinelClient struct {
