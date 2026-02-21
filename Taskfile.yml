@@ -56,6 +56,7 @@ tasks:
   clean:build:
     cmds:
       - rm -rf dist
+      - rm -f rsrc_windows_amd64.syso
     desc: Remove uploader build artifacts.
 
   clean:cache:
@@ -112,6 +113,7 @@ tasks:
     deps: [ensure-deps:zig]
     cmds:
       - mkdir -p dist/windows "{{.ZIG_CACHE_DEFAULT}}"
+      - task: build:windows:resources
       - |
         set -euo pipefail
         LDFLAGS="-X main.BuildVersion={{.BUILD_VERSION}}"
@@ -121,6 +123,63 @@ tasks:
         CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
         go build -ldflags "$LDFLAGS" -o "dist/windows/{{.BIN_NAME}}.exe" .
     desc: Build uploader Windows binary (amd64).
+
+  build:windows:resources:
+    deps: [ensure-deps:zig]
+    cmds:
+      - mkdir -p dist/windows "{{.ZIG_CACHE_DEFAULT}}"
+      - |
+        set -euo pipefail
+        go run ./internal/buildtools/png2ico \
+          -in ./internal/ui/gui/assets/s2-uploader-icon.png \
+          -out ./dist/windows/s2-uploader-icon.ico
+      - |
+        set -euo pipefail
+        RAW_VERSION="{{.BUILD_VERSION}}"
+        MAJOR=0
+        MINOR=0
+        PATCH=0
+        if [[ "$RAW_VERSION" =~ ^[vV]?([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          PATCH="${BASH_REMATCH[3]}"
+        fi
+        cat > ./dist/windows/s2-uploader-icon.rc <<EOF
+        IDI_APP_ICON ICON "s2-uploader-icon.ico"
+        VS_VERSION_INFO VERSIONINFO
+         FILEVERSION ${MAJOR},${MINOR},${PATCH},0
+         PRODUCTVERSION ${MAJOR},${MINOR},${PATCH},0
+         FILEFLAGSMASK 0x3fL
+         FILEFLAGS 0x0L
+         FILEOS 0x40004L
+         FILETYPE 0x1L
+         FILESUBTYPE 0x0L
+        BEGIN
+          BLOCK "StringFileInfo"
+          BEGIN
+            BLOCK "040904B0"
+            BEGIN
+              VALUE "CompanyName", "Sentinel2\\0"
+              VALUE "FileDescription", "Sentinel2 Uploader\\0"
+              VALUE "FileVersion", "${RAW_VERSION}\\0"
+              VALUE "InternalName", "sentinel2-uploader\\0"
+              VALUE "OriginalFilename", "sentinel2-uploader.exe\\0"
+              VALUE "ProductName", "Sentinel2 Uploader\\0"
+              VALUE "ProductVersion", "${RAW_VERSION}\\0"
+            END
+          END
+          BLOCK "VarFileInfo"
+          BEGIN
+            VALUE "Translation", 0x0409, 1200
+          END
+        END
+        EOF
+      - |
+        set -euo pipefail
+        pushd ./dist/windows >/dev/null
+        ZIG_GLOBAL_CACHE_DIR="{{.ZIG_CACHE_DEFAULT}}" zig rc /nologo /fo ../../rsrc_windows_amd64.syso ./s2-uploader-icon.rc
+        popd >/dev/null
+    desc: Generate Windows icon resources (.ico + .syso) from the app icon.
 
   build:darwin:
     cmds:

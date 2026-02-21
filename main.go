@@ -31,6 +31,24 @@ func main() {
 		os.Exit(2)
 	}
 
+	lock, lockedByOther, lockErr := acquireInstanceLock()
+	if lockErr != nil {
+		fmt.Fprintln(os.Stderr, "failed to initialize single-instance lock:", lockErr)
+		os.Exit(2)
+	}
+	if lockedByOther {
+		if !gui.Available() || opts.Headless {
+			fmt.Fprintln(os.Stderr, "Sentinel2 Uploader is already running.")
+		} else {
+			hideAndDetachConsoleForGUI()
+			showAlreadyRunningDialog()
+		}
+		os.Exit(1)
+	}
+	defer func() {
+		_ = lock.Release()
+	}()
+
 	// Headless-tag builds always run headless; runtime UI selection is ignored.
 	if !gui.Available() {
 		headless.Run(rootCtx, BuildVersion, opts)

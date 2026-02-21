@@ -14,3 +14,7 @@ var s2UploaderIconPNG []byte
 func uploaderIconResource() fyne.Resource {
 	return fyne.NewStaticResource("s2-uploader-icon.png", s2UploaderIconPNG)
 }
+
+func AppIconResource() fyne.Resource {
+	return uploaderIconResource()
+}
