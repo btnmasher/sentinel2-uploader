@@ -13,6 +13,7 @@ type Logger struct {
 	debugEnabled atomic.Bool
 	terminalOut  atomic.Bool
 	pretty       bool
+	fileSink     *fileSink
 	mu           sync.RWMutex
 	nextID       int
 	subscribers  map[int]func(Event)
@@ -64,6 +65,38 @@ func (l *Logger) SetTerminalOutputEnabled(enabled bool) {
 	l.terminalOut.Store(enabled)
 }
 
+func (l *Logger) EnableFilePersistence(maxBytes int64) error {
+	if l == nil {
+		return nil
+	}
+	sink, err := newFileSink(maxBytes)
+	if err != nil {
+		return err
+	}
+	l.mu.Lock()
+	old := l.fileSink
+	l.fileSink = sink
+	l.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	return nil
+}
+
+func (l *Logger) Close() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	sink := l.fileSink
+	l.fileSink = nil
+	l.mu.Unlock()
+	if sink == nil {
+		return nil
+	}
+	return sink.Close()
+}
+
 func (l *Logger) Info(msg string, fields ...slog.Attr) {
 	if l == nil {
 		return
@@ -110,6 +143,12 @@ func (l *Logger) log(level slog.Level, msg string, attrs []slog.Attr) {
 		Level:   level,
 		Message: msg,
 		Fields:  attrsToMap(attrs),
+	}
+	l.mu.RLock()
+	sink := l.fileSink
+	l.mu.RUnlock()
+	if sink != nil {
+		_ = sink.WriteEvent(event)
 	}
 	if l.terminalOut.Load() {
 		l.emit(event)

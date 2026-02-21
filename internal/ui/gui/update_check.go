@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/dialog"
 
+	"sentinel2-uploader/internal/config"
 	"sentinel2-uploader/internal/logging"
 )
 
@@ -135,7 +136,7 @@ func (c *controller) promptForUpdate(latest latestRelease) {
 	if tag == "" {
 		return
 	}
-	if c.updatePrompted == tag {
+	if c.shouldSuppressUpdatePrompt(tag) {
 		return
 	}
 	c.updatePrompted = tag
@@ -149,6 +150,7 @@ func (c *controller) promptForUpdate(latest latestRelease) {
 		fmt.Sprintf("A newer uploader version is available (%s). Current version is %s.\n\nOpen the releases page?", tag, c.version),
 		func(ok bool) {
 			if !ok {
+				c.rememberDismissedUpdateTag(tag)
 				return
 			}
 			u, err := url.Parse(dest)
@@ -162,6 +164,41 @@ func (c *controller) promptForUpdate(latest latestRelease) {
 		},
 		c.win,
 	)
+}
+
+func (c *controller) shouldSuppressUpdatePrompt(tag string) bool {
+	if c.updatePrompted == tag {
+		return true
+	}
+	dismissed := strings.TrimSpace(c.dismissedTag)
+	if dismissed == "" {
+		return false
+	}
+	return shouldSuppressDismissedTag(tag, dismissed)
+}
+
+func shouldSuppressDismissedTag(latestTag string, dismissedTag string) bool {
+	latestVersion, latestValid := parseVersionInfo(latestTag)
+	dismissedVersion, dismissedValid := parseVersionInfo(dismissedTag)
+	if latestValid && dismissedValid {
+		newerThanDismissed, _ := isUpdateAvailable(dismissedVersion, latestVersion)
+		return !newerThanDismissed
+	}
+	return strings.EqualFold(strings.TrimSpace(latestTag), strings.TrimSpace(dismissedTag))
+}
+
+func (c *controller) rememberDismissedUpdateTag(tag string) {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return
+	}
+	c.dismissedTag = tag
+	c.updatePrompted = tag
+	c.settings.LastDismissedUpdateTag = tag
+	c.draft.LastDismissedUpdateTag = tag
+	if err := config.SaveSettings(c.settings); err != nil {
+		c.logger.Warn("failed to persist dismissed update tag", logging.Field("tag", tag), logging.Field("error", err))
+	}
 }
 
 func parseVersionInfo(raw string) (versionInfo, bool) {

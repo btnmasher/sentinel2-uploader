@@ -173,5 +173,6 @@ func (m *headlessModel) cleanup() {
 		m.logger.Debug("runtime controller stop requested")
 
 		m.logger.Debug("headless cleanup complete")
+		_ = m.logger.Close()
 	})
 }

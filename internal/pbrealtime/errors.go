@@ -1,8 +1,8 @@
-package client
+package pbrealtime
 
 import (
 	"errors"
-	"sentinel2-uploader/internal/pbrealtime"
+	"fmt"
 )
 
 type HTTPStatusError struct {
@@ -17,13 +17,13 @@ func (e *HTTPStatusError) Error() string {
 	if e.Status != "" {
 		return e.Status
 	}
-	return "http request failed"
+	return fmt.Sprintf("http status %d", e.StatusCode)
 }
 
 func IsUnauthorized(err error) bool {
 	var statusErr *HTTPStatusError
-	if errors.As(err, &statusErr) {
-		return statusErr.StatusCode == 401 || statusErr.StatusCode == 403
+	if !errors.As(err, &statusErr) {
+		return false
 	}
-	return pbrealtime.IsUnauthorized(err)
+	return statusErr.StatusCode == 401 || statusErr.StatusCode == 403
 }

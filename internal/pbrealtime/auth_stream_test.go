@@ -3,6 +3,7 @@ package pbrealtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -109,6 +110,37 @@ func TestAuthClient_FetchSession_MissingTokenFails(t *testing.T) {
 	}
 	if _, err := a.FetchSession(context.Background()); err == nil {
 		t.Fatalf("FetchSession() expected missing token error")
+	}
+}
+
+func TestAuthClient_FetchSession_UnauthorizedTypedError(t *testing.T) {
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Status:     "401 Unauthorized",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"message":"invalid uploader token"}`)),
+				Request:    r,
+			}, nil
+		}),
+	}
+
+	a := AuthClient{
+		HTTP:             httpClient,
+		RealtimeTokenURL: "https://example.test/token",
+	}
+	_, err := a.FetchSession(context.Background())
+	if err == nil {
+		t.Fatalf("FetchSession() expected error")
+	}
+
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error type = %T, want *HTTPStatusError", err)
+	}
+	if statusErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusUnauthorized)
 	}
 }
 

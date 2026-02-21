@@ -14,7 +14,7 @@ import (
 	headlessview "sentinel2-uploader/internal/ui/headless/view"
 )
 
-const headlessLogLimit = 200_000
+const headlessLogLineLimit = 200
 
 const (
 	minLogPanelHeight      = 8
@@ -86,6 +86,7 @@ type modelRuntime struct {
 type headlessModel struct {
 	buildVersion   string
 	updatePrompted string
+	dismissedTag   string
 	modelDeps
 	modelChannels
 	modelRuntime

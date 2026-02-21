@@ -49,7 +49,7 @@ func (a AuthClient) FetchSession(ctx context.Context) (Session, error) {
 				logging.Field("response", body),
 			)
 		}
-		return Session{}, fmt.Errorf("realtime token request failed: %s", resp.Status)
+		return Session{}, &HTTPStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 
 	session := Session{}
@@ -114,7 +114,7 @@ func (a AuthClient) Subscribe(ctx context.Context, clientID string, sessionToken
 				logging.Field("response", body),
 			)
 		}
-		return fmt.Errorf("realtime subscribe failed: %s", resp.Status)
+		return &HTTPStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 
 	if a.Logger != nil {

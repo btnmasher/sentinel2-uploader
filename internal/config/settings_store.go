@@ -8,13 +8,14 @@ import (
 )
 
 type UploaderSettings struct {
-	BaseURL        string `json:"base_url"`
-	Token          string `json:"token"`
-	LogDir         string `json:"log_dir"`
-	AutoConnect    bool   `json:"auto_connect"`
-	Debug          bool   `json:"debug"`
-	MinimizeToTray bool   `json:"minimize_to_tray"`
-	StartMinimized bool   `json:"start_minimized"`
+	BaseURL                string `json:"base_url"`
+	Token                  string `json:"token"`
+	LogDir                 string `json:"log_dir"`
+	AutoConnect            bool   `json:"auto_connect"`
+	Debug                  bool   `json:"debug"`
+	MinimizeToTray         bool   `json:"minimize_to_tray"`
+	StartMinimized         bool   `json:"start_minimized"`
+	LastDismissedUpdateTag string `json:"last_dismissed_update_tag,omitempty"`
 }
 
 func SettingsPath() (string, error) {

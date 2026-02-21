@@ -121,6 +121,7 @@ type controller struct {
 	shuttingDown   bool
 	confirmingQuit bool
 	updatePrompted string
+	dismissedTag   string
 }
 
 func Run(rootCtx context.Context, buildVersion string, defaults config.Options) {
@@ -151,20 +152,24 @@ func newController(rootCtx context.Context, uiApp fyne.App, defaults config.Opti
 		panic("gui.newController: logging.New returned nil")
 	}
 	logger.SetDebugEnabled(settings.Debug)
+	if err := logger.EnableFilePersistence(0); err != nil {
+		logger.Warn("failed to enable file log persistence", logging.Field("error", err))
+	}
 	if rootCtx == nil {
 		rootCtx = context.Background()
 	}
 	appCtx, appCancel := context.WithCancel(rootCtx)
 
 	c := &controller{
-		app:       uiApp,
-		version:   strings.TrimSpace(buildVersion),
-		settings:  settings,
-		draft:     settings,
-		logger:    logger,
-		runner:    runtime.NewController(appCtx),
-		appCtx:    appCtx,
-		appCancel: appCancel,
+		app:          uiApp,
+		version:      strings.TrimSpace(buildVersion),
+		settings:     settings,
+		draft:        settings,
+		logger:       logger,
+		runner:       runtime.NewController(appCtx),
+		appCtx:       appCtx,
+		appCancel:    appCancel,
+		dismissedTag: strings.TrimSpace(settings.LastDismissedUpdateTag),
 	}
 
 	uiApp.SetIcon(uploaderIconResource())

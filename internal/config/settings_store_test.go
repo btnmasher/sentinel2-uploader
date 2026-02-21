@@ -24,13 +24,14 @@ func TestSettingsSaveLoadAndPath(t *testing.T) {
 	}
 
 	in := UploaderSettings{
-		BaseURL:        "https://intel.example.com",
-		Token:          "tok",
-		LogDir:         "/tmp/chatlogs",
-		AutoConnect:    true,
-		Debug:          true,
-		MinimizeToTray: true,
-		StartMinimized: true,
+		BaseURL:                "https://intel.example.com",
+		Token:                  "tok",
+		LogDir:                 "/tmp/chatlogs",
+		AutoConnect:            true,
+		Debug:                  true,
+		MinimizeToTray:         true,
+		StartMinimized:         true,
+		LastDismissedUpdateTag: "v0.0.4",
 	}
 	if err := SaveSettings(in); err != nil {
 		t.Fatalf("SaveSettings() error = %v", err)
@@ -40,6 +41,9 @@ func TestSettingsSaveLoadAndPath(t *testing.T) {
 		t.Fatalf("LoadSettings() error = %v", err)
 	}
 	if out.BaseURL != in.BaseURL || out.Token != in.Token || out.LogDir != in.LogDir || !out.AutoConnect || !out.Debug {
+		t.Fatalf("loaded settings = %#v", out)
+	}
+	if out.LastDismissedUpdateTag != in.LastDismissedUpdateTag {
 		t.Fatalf("loaded settings = %#v", out)
 	}
 }

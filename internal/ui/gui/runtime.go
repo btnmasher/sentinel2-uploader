@@ -299,7 +299,7 @@ func (c *controller) appendLogs(lines []string) {
 }
 
 func (c *controller) trimLogRows() bool {
-	const maxLogRows = 5000
+	const maxLogRows = 200
 	if len(c.logRawLines) <= maxLogRows {
 		return false
 	}
@@ -330,6 +330,7 @@ func (c *controller) cleanup() {
 			c.logger.Debug("runtime controller stopped")
 		}
 		c.logger.Debug("gui cleanup complete")
+		_ = c.logger.Close()
 	})
 }
 

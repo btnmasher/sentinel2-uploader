@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"sentinel2-uploader/internal/client"
@@ -48,6 +49,19 @@ func (a *UploaderApp) Run() error {
 }
 
 func (a *UploaderApp) RunContext(ctx context.Context) error {
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
+
+	var authShutdown atomic.Bool
+	stopForAuth := func(cause error) {
+		if !authShutdown.CompareAndSwap(false, true) {
+			return
+		}
+		a.logger.Warn("stopping uploader due to authentication failure", logging.Field("error", cause))
+		a.setRuntimeStatus(runstatus.DisconnectedAuth)
+		runCancel()
+	}
+
 	a.logger.Info("uploader app starting",
 		logging.Field("log_dir", a.opts.LogDir),
 		logging.Field("log_file", a.opts.LogFile),
@@ -57,8 +71,12 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 		return err
 	}
 
-	session, err := a.client.FetchRealtimeSession(ctx)
+	session, err := a.client.FetchRealtimeSession(runCtx)
 	if err != nil {
+		if client.IsUnauthorized(err) {
+			stopForAuth(err)
+			return nil
+		}
 		return fmt.Errorf("failed to authenticate realtime session: %w", err)
 	}
 	a.setRuntimeStatus(runstatus.Authenticated)
@@ -66,7 +84,7 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 	sessionState := sessionState{}
 	sessionState.setSessionToken(session.Token)
 
-	channels, err := a.client.FetchChannels(ctx, session.Token)
+	channels, err := a.client.FetchChannels(runCtx, session.Token)
 	if err != nil {
 		return fmt.Errorf("failed to fetch channels: %w", err)
 	}
@@ -83,9 +101,9 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 		Channels: channels,
 	}, a.logger, evelogs.MonitorCallbacks{
 		OnReport: func(event evelogs.ReportEvent) error {
-			return a.withSessionRetry(ctx, &sessionState, func(token string) error {
-				return a.client.Submit(ctx, client.SubmitPayload{Text: event.Line, ChannelID: event.Channel.ID}, token)
-			})
+			return a.withSessionRetry(runCtx, &sessionState, func(token string) error {
+				return a.client.Submit(runCtx, client.SubmitPayload{Text: event.Line, ChannelID: event.Channel.ID}, token)
+			}, stopForAuth)
 		},
 		OnError: func(err error) {
 			a.logger.Warn("log monitor callback error", logging.Field("error", err))
@@ -96,7 +114,7 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 	}
 
 	connected := make(chan struct{}, 1)
-	configUpdates := a.client.StartChannelConfigSync(ctx, channels, client.SyncHooks{
+	configUpdates := a.client.StartChannelConfigSync(runCtx, channels, client.SyncHooks{
 		OnConnected: func(topic string, session pbrealtime.Session) {
 			sessionState.setConnectedSession(session.Token)
 			a.setRuntimeStatus(runstatus.Connected)
@@ -107,27 +125,28 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 		},
 		OnDisconnected: func(err error) {
 			sessionState.clearConnection()
-			if ctx.Err() == nil {
+			if runCtx.Err() == nil {
 				if client.IsUnauthorized(err) {
 					a.setRuntimeStatus(runstatus.DisconnectedAuth)
 				} else {
 					a.setRuntimeStatus(runstatus.Reconnecting)
 				}
 			}
-			if err != nil && ctx.Err() == nil {
+			if err != nil && runCtx.Err() == nil {
 				a.logger.Debug("realtime channel stream disconnected", logging.Field("error", err))
 			}
 		},
+		OnAuthFailure: stopForAuth,
 	}, &session)
 	monitorUpdates := make(chan []client.ChannelConfig, 1)
-	go a.forwardChannelUpdates(ctx, configUpdates, monitorUpdates)
+	go a.forwardChannelUpdates(runCtx, configUpdates, monitorUpdates)
 
-	waitCtx, waitCancel := context.WithTimeout(ctx, 15*time.Second)
+	waitCtx, waitCancel := context.WithTimeout(runCtx, 15*time.Second)
 	defer waitCancel()
 	select {
 	case <-waitCtx.Done():
-		if ctx.Err() != nil {
-			a.logger.Debug("stopping startup handshake wait: context canceled", logging.Field("error", ctx.Err()))
+		if runCtx.Err() != nil {
+			a.logger.Debug("stopping startup handshake wait: context canceled", logging.Field("error", runCtx.Err()))
 		} else {
 			a.logger.Debug("startup handshake wait expired", logging.Field("error", waitCtx.Err()))
 		}
@@ -136,9 +155,13 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 		a.setRuntimeStatus(runstatus.Connected)
 	}
 
-	go a.runHeartbeatLoop(ctx, &sessionState)
+	go a.runHeartbeatLoop(runCtx, &sessionState, stopForAuth)
 
-	runErr := monitor.RunContext(ctx, monitorUpdates)
+	runErr := monitor.RunContext(runCtx, monitorUpdates)
+	if authShutdown.Load() {
+		a.logger.Info("uploader app stopped due to authentication failure")
+		return nil
+	}
 	if runErr != nil {
 		a.setRuntimeStatus(runstatus.Disconnected)
 		a.logger.Warn("uploader app stopped with error", logging.Field("error", runErr))
@@ -209,7 +232,7 @@ func (s *sessionState) sessionTokenIfConnected() (string, bool) {
 	return s.token, true
 }
 
-func (a *UploaderApp) withSessionRetry(ctx context.Context, state *sessionState, call func(token string) error) error {
+func (a *UploaderApp) withSessionRetry(ctx context.Context, state *sessionState, call func(token string) error, onAuthFailure func(error)) error {
 	token, ok := state.sessionToken()
 	if !ok {
 		return fmt.Errorf("uploader session unavailable")
@@ -221,24 +244,37 @@ func (a *UploaderApp) withSessionRetry(ctx context.Context, state *sessionState,
 
 	refreshed, refreshErr := a.client.RefreshSession(ctx, token)
 	if refreshErr != nil {
-		if client.IsUnauthorized(refreshErr) {
-			state.clearConnection()
-			a.setRuntimeStatus(runstatus.DisconnectedAuth)
+		if !client.IsUnauthorized(refreshErr) {
+			return err
 		}
-		return err
+
+		a.logger.Warn("short session refresh unauthorized; attempting long-lived re-auth", logging.Field("error", refreshErr))
+		longLivedSession, fetchErr := a.client.FetchRealtimeSession(ctx)
+		if fetchErr != nil {
+			if client.IsUnauthorized(fetchErr) {
+				state.clearConnection()
+				a.setRuntimeStatus(runstatus.DisconnectedAuth)
+				if onAuthFailure != nil {
+					onAuthFailure(fetchErr)
+				}
+			}
+			return err
+		}
+		refreshed = longLivedSession
 	}
+
 	state.setSessionToken(refreshed.Token)
 	return call(refreshed.Token)
 }
 
-func (a *UploaderApp) runHeartbeatLoop(ctx context.Context, state *sessionState) {
+func (a *UploaderApp) runHeartbeatLoop(ctx context.Context, state *sessionState, onAuthFailure func(error)) {
 	send := func() bool {
 		if _, ok := state.sessionTokenIfConnected(); !ok {
 			return true
 		}
 		if err := a.withSessionRetry(ctx, state, func(token string) error {
 			return a.client.Heartbeat(ctx, token)
-		}); err != nil {
+		}, onAuthFailure); err != nil {
 			if ctx.Err() != nil {
 				return false
 			}

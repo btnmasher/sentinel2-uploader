@@ -43,7 +43,7 @@ func (m *headlessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case logMsg:
 		line := string(msg)
 		wasAtBottom := m.ui.LogView.AtBottom()
-		m.ui.LogText = logging.AppendWithLimit(m.ui.LogText, line, headlessLogLimit)
+		m.ui.LogText = appendLogLinesWithLimit(m.ui.LogText, line, headlessLogLineLimit)
 		m.ui.SetLogViewportContent()
 		if m.ui.FollowLogs || wasAtBottom {
 			m.ui.LogView.GotoBottom()
@@ -56,7 +56,7 @@ func (m *headlessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForChannels(m.cfgCh)
 	case updateAvailableMsg:
 		tag := strings.TrimSpace(msg.tag)
-		if tag == "" || m.updatePrompted == tag {
+		if tag == "" || m.shouldSuppressUpdatePrompt(tag) {
 			return m, waitForUpdate(m.updateCh)
 		}
 		m.updatePrompted = tag
@@ -123,8 +123,13 @@ func (m *headlessModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *headlessModel) updateMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	wasUpdateModalOpen := m.ui.UpdateModalOpen
+	dismissedTag := strings.TrimSpace(m.ui.UpdateLatestTag)
 	next, cmd, effect := headlessview.ReduceMouse(m.ui, msg)
 	m.ui = next
+	if wasUpdateModalOpen && !m.ui.UpdateModalOpen && effect != headlessview.MouseEffectUpdateAccept {
+		m.rememberDismissedUpdateTag(dismissedTag)
+	}
 	switch effect {
 	case headlessview.MouseEffectActivateFocused:
 		return m, tea.Batch(cmd, m.activateFocusedControl())
@@ -137,8 +142,13 @@ func (m *headlessModel) updateMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *headlessModel) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	wasUpdateModalOpen := m.ui.UpdateModalOpen
+	dismissedTag := strings.TrimSpace(m.ui.UpdateLatestTag)
 	next, effect := headlessview.ReduceKey(m.ui, msg)
 	m.ui = next
+	if wasUpdateModalOpen && !m.ui.UpdateModalOpen && effect != headlessview.KeyEffectUpdateAccept {
+		m.rememberDismissedUpdateTag(dismissedTag)
+	}
 	switch effect {
 	case headlessview.KeyEffectRequestQuit:
 		return m, m.requestQuitCmd()
@@ -231,6 +241,28 @@ func waitForMouseDrainCmd() tea.Cmd {
 	}
 }
 
+func appendLogLinesWithLimit(current string, next string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	lines := splitLogLines(current)
+	lines = append(lines, splitLogLines(next)...)
+	if len(lines) > limit {
+		lines = append([]string(nil), lines[len(lines)-limit:]...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func splitLogLines(input string) []string {
+	normalized := strings.ReplaceAll(input, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	lines := strings.Split(normalized, "\n")
+	if len(lines) > 1 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
 func (m *headlessModel) beginQuitCmd() tea.Cmd {
 	m.quitting = true
 	m.ui.ConfirmQuit = false
@@ -294,6 +326,9 @@ func (m *headlessModel) saveSettingsDraft() tea.Cmd {
 	if saved, err := config.LoadSettings(); err == nil {
 		settings.MinimizeToTray = saved.MinimizeToTray
 		settings.StartMinimized = saved.StartMinimized
+		settings.LastDismissedUpdateTag = saved.LastDismissedUpdateTag
+	} else {
+		settings.LastDismissedUpdateTag = m.dismissedTag
 	}
 	if err := config.SaveSettings(settings); err != nil {
 		m.ui.ErrorModalText = err.Error()
@@ -302,4 +337,39 @@ func (m *headlessModel) saveSettingsDraft() tea.Cmd {
 
 	m.ui = next
 	return nil
+}
+
+func (m *headlessModel) shouldSuppressUpdatePrompt(tag string) bool {
+	if m.updatePrompted == tag {
+		return true
+	}
+	dismissed := strings.TrimSpace(m.dismissedTag)
+	if dismissed == "" {
+		return false
+	}
+	latestVersion, latestValid := parseVersionInfo(tag)
+	dismissedVersion, dismissedValid := parseVersionInfo(dismissed)
+	if latestValid && dismissedValid {
+		newerThanDismissed, _ := isUpdateAvailable(dismissedVersion, latestVersion)
+		return !newerThanDismissed
+	}
+	return strings.EqualFold(strings.TrimSpace(tag), dismissed)
+}
+
+func (m *headlessModel) rememberDismissedUpdateTag(tag string) {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return
+	}
+	m.dismissedTag = tag
+	m.updatePrompted = tag
+
+	settings, err := config.LoadSettings()
+	if err != nil {
+		settings = config.SettingsFromOptions(m.currentOptions())
+	}
+	settings.LastDismissedUpdateTag = tag
+	if saveErr := config.SaveSettings(settings); saveErr != nil {
+		m.logger.Warn("failed to persist dismissed update tag", logging.Field("tag", tag), logging.Field("error", saveErr))
+	}
 }

@@ -82,7 +82,7 @@ func (s StreamClient) RunSession(ctx context.Context, session Session, subscribe
 				logging.Field("response", body),
 			)
 		}
-		return fmt.Errorf("realtime connect failed: %s", resp.Status)
+		return &HTTPStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 	defer resp.Body.Close()
 

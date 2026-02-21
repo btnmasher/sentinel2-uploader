@@ -27,7 +27,9 @@ const (
 func Run(rootCtx context.Context, buildVersion string, opts config.Options) {
 	defer forceDisableMouseTracking()
 
+	var savedSettings config.UploaderSettings
 	if saved, loadErr := config.LoadSettings(); loadErr == nil {
+		savedSettings = saved
 		opts = config.MergeOptionsWithSettings(opts, saved)
 	}
 
@@ -36,10 +38,14 @@ func Run(rootCtx context.Context, buildVersion string, opts config.Options) {
 		panic("headless.Run: logging.New returned nil")
 	}
 	logger.SetDebugEnabled(opts.Debug)
+	if err := logger.EnableFilePersistence(0); err != nil {
+		logger.Warn("failed to enable file log persistence", logging.Field("error", err))
+	}
 	logger.SetTerminalOutputEnabled(false)
 	logger.Info("starting uploader TUI", logging.Field("version", buildVersion))
 
 	m := newHeadlessModel(rootCtx, buildVersion, opts, logger)
+	m.dismissedTag = savedSettings.LastDismissedUpdateTag
 	zone.NewGlobal()
 	program := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	m.program = program

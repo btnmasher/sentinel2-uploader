@@ -16,6 +16,7 @@ import (
 type SyncHooks struct {
 	OnConnected    func(string, pbrealtime.Session)
 	OnDisconnected func(error)
+	OnAuthFailure  func(error)
 }
 
 func (c *SentinelClient) FetchRealtimeSession(ctx context.Context) (pbrealtime.Session, error) {
@@ -97,6 +98,16 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 			err := c.runRealtimeConfigSession(ctx, pushUpdate, runHooks, prefetched)
 			if err == nil {
 				return struct{}{}, nil
+			}
+
+			if IsUnauthorized(err) {
+				if hooks.OnDisconnected != nil {
+					hooks.OnDisconnected(err)
+				}
+				if hooks.OnAuthFailure != nil {
+					hooks.OnAuthFailure(err)
+				}
+				return struct{}{}, backoff.Permanent(err)
 			}
 
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -206,6 +217,15 @@ func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate 
 			)
 		},
 	})
+	if IsUnauthorized(runErr) {
+		c.logger.Warn("realtime stream unauthorized; attempting short session refresh", logging.Field("error", runErr))
+		refreshed, refreshErr := c.RefreshSession(ctx, session.Token)
+		if refreshErr == nil {
+			c.logger.Info("realtime short session refresh succeeded; reconnecting stream")
+			return c.runRealtimeConfigSession(ctx, onUpdate, hooks, &refreshed)
+		}
+		c.logger.Warn("realtime short session refresh failed", logging.Field("error", refreshErr))
+	}
 	if connected && hooks.OnDisconnected != nil {
 		hooks.OnDisconnected(runErr)
 	}
