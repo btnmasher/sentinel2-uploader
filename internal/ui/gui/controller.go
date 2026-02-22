@@ -651,13 +651,13 @@ func (c *controller) refreshChannelHealth() {
 			age := now.Sub(last)
 			if age <= channelStatusWarnAfter {
 				health.Color = channelGreenColor
-				health.Reason = fmt.Sprintf("Active: Last report %s ago.", age.Round(time.Second))
+				health.Reason = fmt.Sprintf("Active: Last activity %s ago.", age.Round(time.Second))
 			} else if age <= channelStatusStaleAfter {
 				health.Color = channelYellowColor
-				health.Reason = fmt.Sprintf("Stale: Last report %s ago.", age.Round(time.Second))
+				health.Reason = fmt.Sprintf("Stale: Last activity %s ago.", age.Round(time.Second))
 			} else {
 				health.Color = channelOrangeColor
-				health.Reason = fmt.Sprintf("Very stale: Last report %s ago.", age.Round(time.Second))
+				health.Reason = fmt.Sprintf("Very stale: Last activity %s ago.", age.Round(time.Second))
 			}
 		}
 

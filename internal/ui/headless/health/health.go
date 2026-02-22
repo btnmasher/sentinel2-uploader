@@ -84,13 +84,13 @@ func Compute(logDir string, channels []client.ChannelConfig, now time.Time) ([]R
 			switch {
 			case age <= warnAfter:
 				row.Kind = Active
-				row.Reason = fmt.Sprintf("%s updated %s ago.", fileName, age.Round(time.Second))
+				row.Reason = fmt.Sprintf("%s activity %s ago.", fileName, age.Round(time.Second))
 			case age <= staleAfter:
 				row.Kind = Warn
-				row.Reason = fmt.Sprintf("%s has no updates for %s.", fileName, age.Round(time.Second))
+				row.Reason = fmt.Sprintf("%s has no activity for %s.", fileName, age.Round(time.Second))
 			default:
 				row.Kind = Stale
-				row.Reason = fmt.Sprintf("%s has no updates for %s.", fileName, age.Round(time.Second))
+				row.Reason = fmt.Sprintf("%s has no activity for %s.", fileName, age.Round(time.Second))
 			}
 		}
 		rows = append(rows, row)
