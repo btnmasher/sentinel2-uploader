@@ -2,12 +2,12 @@ package pbrealtime
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,7 +27,6 @@ type StreamClient struct {
 	RealtimeURL string
 	RefreshLead time.Duration
 	ExtraTopics []string
-	ForceHTTP1  bool
 	Logger      *logging.Logger
 }
 
@@ -70,13 +69,18 @@ func (s StreamClient) RunSession(ctx context.Context, session Session, subscribe
 	// stay open until server disconnect/reconnect boundaries.
 	streamHTTP := *httpClient
 	streamHTTP.Timeout = 0
-	if s.ForceHTTP1 {
-		streamHTTP.Transport = http1OnlyRoundTripper(streamHTTP.Transport)
-	}
 
 	resp, respErr := streamHTTP.Do(req)
 	if respErr != nil {
 		return respErr
+	}
+	connectedAt := time.Now()
+	if s.Logger != nil {
+		s.Logger.Debug("realtime stream connected",
+			logging.Field("status", resp.Status),
+			logging.Field("proto", resp.Proto),
+			logging.Field("response_headers", streamDiagnosticHeaders(resp.Header)),
+		)
 	}
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
@@ -85,6 +89,8 @@ func (s StreamClient) RunSession(ctx context.Context, session Session, subscribe
 		if s.Logger != nil {
 			s.Logger.Warn("realtime connect failed",
 				logging.Field("status", resp.Status),
+				logging.Field("proto", resp.Proto),
+				logging.Field("response_headers", streamDiagnosticHeaders(resp.Header)),
 				logging.Field("response", body),
 			)
 		}
@@ -100,6 +106,23 @@ func (s StreamClient) RunSession(ctx context.Context, session Session, subscribe
 	defer refreshTimer.Stop()
 
 	var currentClientID string
+	var eventCount int
+	var pbConnectEvents int
+	var messageEvents int
+	var unhandledEvents int
+	logEnd := func(err error) {
+		if s.Logger == nil {
+			return
+		}
+		s.Logger.Debug("realtime stream ended",
+			logging.Field("error", err),
+			logging.Field("duration", time.Since(connectedAt).String()),
+			logging.Field("events_total", eventCount),
+			logging.Field("events_pb_connect", pbConnectEvents),
+			logging.Field("events_message", messageEvents),
+			logging.Field("events_unhandled", unhandledEvents),
+		)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -113,17 +136,18 @@ func (s StreamClient) RunSession(ctx context.Context, session Session, subscribe
 			}
 			return ErrSessionRefreshDue
 		case streamErr := <-streamErrs:
-			if s.Logger != nil {
-				s.Logger.Debug("realtime stream ended", logging.Field("error", streamErr))
-			}
+			logEnd(streamErr)
 			return streamErr
 		case event, ok := <-events:
 			if !ok {
+				logEnd(io.EOF)
 				return io.EOF
 			}
+			eventCount++
 
 			switch event.Name {
 			case "PB_CONNECT":
+				pbConnectEvents++
 				payload := connectPayload{}
 				if unmarshalErr := json.Unmarshal(event.Data, &payload); unmarshalErr != nil {
 					return fmt.Errorf("invalid PB_CONNECT payload: %w", unmarshalErr)
@@ -145,16 +169,53 @@ func (s StreamClient) RunSession(ctx context.Context, session Session, subscribe
 					handlers.OnConnected(session.Topic)
 				}
 			case session.Topic:
+				messageEvents++
 				if handlers.OnMessage != nil {
 					handlers.OnMessage(event)
 				}
 			default:
+				unhandledEvents++
 				if handlers.OnUnhandled != nil {
 					handlers.OnUnhandled(event)
 				}
 			}
 		}
 	}
+}
+
+func streamDiagnosticHeaders(header http.Header) map[string]string {
+	if len(header) == 0 {
+		return nil
+	}
+
+	allow := map[string]struct{}{
+		"content-type":      {},
+		"cache-control":     {},
+		"connection":        {},
+		"transfer-encoding": {},
+		"server":            {},
+		"alt-svc":           {},
+		"cf-ray":            {},
+		"cf-cache-status":   {},
+		"via":               {},
+	}
+
+	keys := make([]string, 0, len(allow))
+	for key := range allow {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if values := header.Values(key); len(values) > 0 {
+			out[key] = strings.Join(values, ", ")
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func buildSubscribeTopics(primary string, extras []string) []string {
@@ -178,29 +239,4 @@ func buildSubscribeTopics(primary string, extras []string) []string {
 		appendTopic(topic)
 	}
 	return topics
-}
-
-func http1OnlyRoundTripper(rt http.RoundTripper) http.RoundTripper {
-	switch transport := rt.(type) {
-	case nil:
-		base, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			return rt
-		}
-		clone := base.Clone()
-		disableHTTP2(clone)
-		return clone
-	case *http.Transport:
-		clone := transport.Clone()
-		disableHTTP2(clone)
-		return clone
-	default:
-		// Custom transports (eg test round-trippers) may not support HTTP/2 anyway.
-		return rt
-	}
-}
-
-func disableHTTP2(transport *http.Transport) {
-	transport.ForceAttemptHTTP2 = false
-	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 }
