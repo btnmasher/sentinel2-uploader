@@ -45,10 +45,15 @@ func (l *Logger) Debugf(format string, args ...any) {
 }
 
 func (l *Logger) Debug(msg string, fields ...slog.Attr) {
-	if l == nil || !l.debugEnabled.Load() {
+	if l == nil {
 		return
 	}
-	l.log(slog.LevelDebug, msg, fields)
+	if !l.debugEnabled.Load() {
+		// Persist debug telemetry to file even when debug output is hidden in UI/terminal.
+		l.log(slog.LevelDebug, msg, fields, false)
+		return
+	}
+	l.log(slog.LevelDebug, msg, fields, true)
 }
 
 func (l *Logger) SetDebugEnabled(enabled bool) {
@@ -101,21 +106,21 @@ func (l *Logger) Info(msg string, fields ...slog.Attr) {
 	if l == nil {
 		return
 	}
-	l.log(slog.LevelInfo, msg, fields)
+	l.log(slog.LevelInfo, msg, fields, true)
 }
 
 func (l *Logger) Warn(msg string, fields ...slog.Attr) {
 	if l == nil {
 		return
 	}
-	l.log(slog.LevelWarn, msg, fields)
+	l.log(slog.LevelWarn, msg, fields, true)
 }
 
 func (l *Logger) Error(msg string, fields ...slog.Attr) {
 	if l == nil {
 		return
 	}
-	l.log(slog.LevelError, msg, fields)
+	l.log(slog.LevelError, msg, fields, true)
 }
 
 func (l *Logger) Subscribe(fn func(Event)) func() {
@@ -137,7 +142,7 @@ func (l *Logger) Subscribe(fn func(Event)) func() {
 	}
 }
 
-func (l *Logger) log(level slog.Level, msg string, attrs []slog.Attr) {
+func (l *Logger) log(level slog.Level, msg string, attrs []slog.Attr, publish bool) {
 	event := Event{
 		Time:    time.Now(),
 		Level:   level,
@@ -150,10 +155,12 @@ func (l *Logger) log(level slog.Level, msg string, attrs []slog.Attr) {
 	if sink != nil {
 		_ = sink.WriteEvent(event)
 	}
-	if l.terminalOut.Load() {
+	if publish && l.terminalOut.Load() {
 		l.emit(event)
 	}
-	l.publishEvent(event)
+	if publish {
+		l.publishEvent(event)
+	}
 }
 
 func (l *Logger) emit(event Event) {

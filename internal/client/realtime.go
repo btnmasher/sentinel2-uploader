@@ -14,10 +14,11 @@ import (
 )
 
 type SyncHooks struct {
-	OnConnected    func(string, pbrealtime.Session, uint64)
-	OnDisconnected func(error, uint64)
-	OnStopped      func(error)
-	OnAuthFailure  func(error)
+	OnConnected                           func(string, pbrealtime.Session, uint64)
+	OnDisconnected                        func(error, uint64)
+	OnStopped                             func(error)
+	OnAuthFailure                         func(error)
+	ShouldContinueAfterReconnectExhausted func(lastErr error, maxElapsed time.Duration) bool
 }
 
 func (c *SentinelClient) FetchRealtimeSession(ctx context.Context) (pbrealtime.Session, error) {
@@ -81,63 +82,75 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 
 		useInitialSession := initialSession != nil
 		var sessionEpoch uint64
-		_, retryErr := backoff.Retry(ctx, func() (struct{}, error) {
-			sessionEpoch++
-			attemptEpoch := sessionEpoch
-			// Session blocks while connected; returns when disconnected/expired.
-			var prefetched *pbrealtime.Session
-			if useInitialSession && initialSession != nil {
-				s := *initialSession
-				prefetched = &s
-				prefetchedToken = s.Token
-				useInitialSession = false
-			}
-			runHooks := hooks
-			runHooks.OnConnected = func(topic string, session pbrealtime.Session, _ uint64) {
-				prefetchedToken = session.Token
-				if hooks.OnConnected != nil {
-					hooks.OnConnected(topic, session, attemptEpoch)
+		for {
+			_, retryErr := backoff.Retry(ctx, func() (struct{}, error) {
+				sessionEpoch++
+				attemptEpoch := sessionEpoch
+				// Session blocks while connected; returns when disconnected/expired.
+				var prefetched *pbrealtime.Session
+				if useInitialSession && initialSession != nil {
+					s := *initialSession
+					prefetched = &s
+					prefetchedToken = s.Token
+					useInitialSession = false
 				}
-			}
-			err := c.runRealtimeConfigSession(ctx, pushUpdate, runHooks, prefetched, attemptEpoch)
-			if err == nil {
-				return struct{}{}, nil
-			}
+				runHooks := hooks
+				runHooks.OnConnected = func(topic string, session pbrealtime.Session, _ uint64) {
+					prefetchedToken = session.Token
+					if hooks.OnConnected != nil {
+						hooks.OnConnected(topic, session, attemptEpoch)
+					}
+				}
+				err := c.runRealtimeConfigSession(ctx, pushUpdate, runHooks, prefetched, attemptEpoch)
+				if err == nil {
+					return struct{}{}, nil
+				}
 
-			if IsUnauthorized(err) {
-				if hooks.OnDisconnected != nil {
-					hooks.OnDisconnected(err, attemptEpoch)
+				if IsUnauthorized(err) {
+					if hooks.OnDisconnected != nil {
+						hooks.OnDisconnected(err, attemptEpoch)
+					}
+					if hooks.OnAuthFailure != nil {
+						hooks.OnAuthFailure(err)
+					}
+					return struct{}{}, backoff.Permanent(err)
 				}
-				if hooks.OnAuthFailure != nil {
-					hooks.OnAuthFailure(err)
-				}
-				return struct{}{}, backoff.Permanent(err)
-			}
 
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return struct{}{}, err
+				}
+
+				if isExpectedRealtimeReconnect(err) {
+					c.logger.Debug("realtime channel sync reconnecting", logging.Field("error", err))
+					return struct{}{}, err
+				}
+
+				c.logger.Warn("realtime channel sync disconnected", logging.Field("error", err))
+
+				fallbackFetch()
+
 				return struct{}{}, err
+			},
+				backoff.WithBackOff(retry),
+				backoff.WithMaxElapsedTime(reconnectMaxElapsed),
+				backoff.WithNotify(func(err error, next time.Duration) {
+					c.logger.Debug("retrying realtime channel sync",
+						logging.Field("error", err),
+						logging.Field("next_retry", next.String()))
+				}),
+			)
+			if retryErr == nil || errors.Is(retryErr, context.Canceled) || errors.Is(retryErr, context.DeadlineExceeded) {
+				break
 			}
-
-			if isExpectedRealtimeReconnect(err) {
-				c.logger.Debug("realtime channel sync reconnecting", logging.Field("error", err))
-				return struct{}{}, err
+			if hooks.ShouldContinueAfterReconnectExhausted != nil &&
+				hooks.ShouldContinueAfterReconnectExhausted(retryErr, reconnectMaxElapsed) {
+				c.logger.Warn(
+					"realtime reconnect window extended due to recent successful API activity",
+					logging.Field("error", retryErr),
+					logging.Field("max_elapsed", reconnectMaxElapsed.String()),
+				)
+				continue
 			}
-
-			c.logger.Warn("realtime channel sync disconnected", logging.Field("error", err))
-
-			fallbackFetch()
-
-			return struct{}{}, err
-		},
-			backoff.WithBackOff(retry),
-			backoff.WithMaxElapsedTime(reconnectMaxElapsed),
-			backoff.WithNotify(func(err error, next time.Duration) {
-				c.logger.Debug("retrying realtime channel sync",
-					logging.Field("error", err),
-					logging.Field("next_retry", next.String()))
-			}),
-		)
-		if retryErr != nil && !errors.Is(retryErr, context.Canceled) && !errors.Is(retryErr, context.DeadlineExceeded) {
 			c.logger.Warn("realtime channel sync stopped", logging.Field("error", retryErr))
 			if hooks.OnStopped != nil {
 				hooks.OnStopped(retryErr)

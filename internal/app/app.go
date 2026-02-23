@@ -22,11 +22,12 @@ import (
 const heartbeatInterval = 30 * time.Second
 
 type UploaderApp struct {
-	opts   config.Options
-	client *client.SentinelClient
-	logger *logging.Logger
-	hooks  Callbacks
-	status runtimeStatusState
+	opts               config.Options
+	client             *client.SentinelClient
+	logger             *logging.Logger
+	hooks              Callbacks
+	status             runtimeStatusState
+	lastAPISuccessUnix atomic.Int64
 }
 
 type connectionEventKind string
@@ -167,6 +168,12 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 	configUpdates := a.client.StartChannelConfigSync(runCtx, channels, client.SyncHooks{
 		OnConnected: func(topic string, session pbrealtime.Session, epoch uint64) {
 			sessionState.setConnectedSession(session.Token)
+			a.logger.Info("realtime epoch connected",
+				logging.Field("epoch", epoch),
+				logging.Field("topic", topic),
+				logging.Field("expires_at", session.ExpiresAt),
+				logging.Field("refresh_after_seconds", session.RefreshAfterSeconds),
+			)
 			a.applyConnectionEvent(newRealtimeEpochEvent(connectionEventRealtimeConnected, epoch))
 			select {
 			case connected <- struct{}{}:
@@ -175,6 +182,10 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 		},
 		OnDisconnected: func(err error, epoch uint64) {
 			sessionState.clearConnection()
+			a.logger.Warn("realtime epoch disconnected",
+				logging.Field("epoch", epoch),
+				logging.Field("error", err),
+			)
 			if runCtx.Err() == nil {
 				if err == nil {
 					a.logger.Debug("ignoring reconnect status transition: realtime disconnected without an error")
@@ -200,6 +211,23 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 			runCancel()
 		},
 		OnAuthFailure: stopForAuth,
+		ShouldContinueAfterReconnectExhausted: func(lastErr error, maxElapsed time.Duration) bool {
+			lastSuccessUnix := a.lastAPISuccessUnix.Load()
+			if lastSuccessUnix <= 0 {
+				return false
+			}
+			lastSuccess := time.Unix(lastSuccessUnix, 0)
+			since := time.Since(lastSuccess)
+			if since > maxElapsed {
+				return false
+			}
+			a.logger.Warn("keeping realtime reconnect attempts alive due to recent successful API activity",
+				logging.Field("error", lastErr),
+				logging.Field("last_api_success_ago", since.String()),
+				logging.Field("max_elapsed", maxElapsed.String()),
+			)
+			return true
+		},
 	}, &session)
 	monitorUpdates := make(chan []client.ChannelConfig, 1)
 	go a.forwardChannelUpdates(runCtx, configUpdates, monitorUpdates)
@@ -423,6 +451,7 @@ func (a *UploaderApp) withSessionRetry(ctx context.Context, state *sessionState,
 }
 
 func (a *UploaderApp) markConnectionHealthy() {
+	a.lastAPISuccessUnix.Store(time.Now().Unix())
 	key := a.status.key()
 	if key == runstatus.KeyDisconnected || key == runstatus.KeyDisconnectedAuth {
 		return
@@ -432,7 +461,7 @@ func (a *UploaderApp) markConnectionHealthy() {
 
 func (a *UploaderApp) runHeartbeatLoop(ctx context.Context, state *sessionState, onAuthFailure func(error)) {
 	send := func() bool {
-		if _, ok := state.sessionTokenIfConnected(); !ok {
+		if _, ok := state.sessionToken(); !ok {
 			return true
 		}
 		if err := a.withSessionRetry(ctx, state, func(token string) error {
