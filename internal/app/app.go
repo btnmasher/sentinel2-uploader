@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -220,6 +221,9 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 			since := time.Since(lastSuccess)
 			if since > maxElapsed {
 				return false
+			}
+			if errors.Is(lastErr, pbrealtime.ErrSessionRefreshDue) {
+				return true
 			}
 			a.logger.Warn("keeping realtime reconnect attempts alive due to recent successful API activity",
 				logging.Field("error", lastErr),
