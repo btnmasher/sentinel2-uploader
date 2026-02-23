@@ -236,3 +236,59 @@ func TestStreamClient_RunSession_ConnectMessageAndUnhandled(t *testing.T) {
 		t.Fatalf("unhandled count = %d, want 1", unhandledCount)
 	}
 }
+
+func TestHTTP1OnlyRoundTripper_DisablesHTTP2OnHTTPTransport(t *testing.T) {
+	original := &http.Transport{
+		ForceAttemptHTTP2: true,
+	}
+
+	rt := http1OnlyRoundTripper(original)
+	transport, ok := rt.(*http.Transport)
+	if !ok {
+		t.Fatalf("round tripper type = %T, want *http.Transport", rt)
+	}
+	if transport == original {
+		t.Fatalf("expected cloned transport, got original pointer")
+	}
+	if transport.ForceAttemptHTTP2 {
+		t.Fatalf("ForceAttemptHTTP2 = true, want false")
+	}
+	if transport.TLSNextProto == nil {
+		t.Fatalf("TLSNextProto = nil, want explicit empty map to disable HTTP/2")
+	}
+	if !original.ForceAttemptHTTP2 {
+		t.Fatalf("original transport mutated")
+	}
+}
+
+func TestHTTP1OnlyRoundTripper_LeavesCustomRoundTripperUnchanged(t *testing.T) {
+	custom := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Status:     "204 No Content",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    r,
+		}, nil
+	})
+
+	rt := http1OnlyRoundTripper(custom)
+	if _, ok := rt.(roundTripFunc); !ok {
+		t.Fatalf("round tripper type = %T, want roundTripFunc passthrough", rt)
+	}
+}
+
+func TestBuildSubscribeTopics_DedupesAndSkipsEmpty(t *testing.T) {
+	got := buildSubscribeTopics("uploader.config", []string{
+		"",
+		"realtime.keepalive",
+		" uploader.config ",
+		"realtime.keepalive",
+	})
+	if len(got) != 2 {
+		t.Fatalf("len(topics) = %d, want 2 (%v)", len(got), got)
+	}
+	if got[0] != "uploader.config" || got[1] != "realtime.keepalive" {
+		t.Fatalf("topics = %v", got)
+	}
+}

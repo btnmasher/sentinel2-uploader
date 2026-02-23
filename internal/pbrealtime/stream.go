@@ -2,6 +2,7 @@ package pbrealtime
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,8 @@ type StreamClient struct {
 	HTTP        *http.Client
 	RealtimeURL string
 	RefreshLead time.Duration
+	ExtraTopics []string
+	ForceHTTP1  bool
 	Logger      *logging.Logger
 }
 
@@ -67,6 +70,9 @@ func (s StreamClient) RunSession(ctx context.Context, session Session, subscribe
 	// stay open until server disconnect/reconnect boundaries.
 	streamHTTP := *httpClient
 	streamHTTP.Timeout = 0
+	if s.ForceHTTP1 {
+		streamHTTP.Transport = http1OnlyRoundTripper(streamHTTP.Transport)
+	}
 
 	resp, respErr := streamHTTP.Do(req)
 	if respErr != nil {
@@ -132,7 +138,7 @@ func (s StreamClient) RunSession(ctx context.Context, session Session, subscribe
 					continue
 				}
 				currentClientID = payload.ClientID
-				if subscribeErr := subscribe(ctx, currentClientID, session.Token, []string{session.Topic}); subscribeErr != nil {
+				if subscribeErr := subscribe(ctx, currentClientID, session.Token, buildSubscribeTopics(session.Topic, s.ExtraTopics)); subscribeErr != nil {
 					return subscribeErr
 				}
 				if handlers.OnConnected != nil {
@@ -149,4 +155,52 @@ func (s StreamClient) RunSession(ctx context.Context, session Session, subscribe
 			}
 		}
 	}
+}
+
+func buildSubscribeTopics(primary string, extras []string) []string {
+	seen := make(map[string]struct{}, len(extras)+1)
+	topics := make([]string, 0, len(extras)+1)
+
+	appendTopic := func(topic string) {
+		name := strings.TrimSpace(topic)
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		topics = append(topics, name)
+	}
+
+	appendTopic(primary)
+	for _, topic := range extras {
+		appendTopic(topic)
+	}
+	return topics
+}
+
+func http1OnlyRoundTripper(rt http.RoundTripper) http.RoundTripper {
+	switch transport := rt.(type) {
+	case nil:
+		base, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return rt
+		}
+		clone := base.Clone()
+		disableHTTP2(clone)
+		return clone
+	case *http.Transport:
+		clone := transport.Clone()
+		disableHTTP2(clone)
+		return clone
+	default:
+		// Custom transports (eg test round-trippers) may not support HTTP/2 anyway.
+		return rt
+	}
+}
+
+func disableHTTP2(transport *http.Transport) {
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 }

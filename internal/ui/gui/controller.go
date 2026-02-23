@@ -77,8 +77,7 @@ type controller struct {
 	connectOnStart *sliderToggle
 	minimizeToTray *sliderToggle
 	startMinimized *sliderToggle
-	statusBadge    *statusBadge
-	statusText     *widget.Label
+	statusLine     *statusBadgeLabel
 
 	startButton    *widget.Button
 	stopButton     *widget.Button
@@ -299,13 +298,15 @@ func (c *controller) buildUI(defaults config.Options) {
 	})
 	c.startMinimized.SetChecked(c.draft.StartMinimized)
 
-	c.statusBadge = newStatusBadge(statusBadgeHandlers{
+	c.statusLine = newStatusBadgeLabel(statusBadgeHandlers{
 		Show: c.showHoverTooltip,
 		Move: c.moveHoverTooltip,
 		Hide: c.hideHoverTooltip,
+	}, "Idle", statusBadgeLabelOptions{
+		DotNudgeY: 2,
+		GapX:      0,
 	})
-	c.statusBadge.SetStatus(statusIdleColor, "Idle")
-	c.statusText = widget.NewLabel("Idle")
+	c.statusLine.SetStatus(statusIdleColor, "Idle")
 	c.channelRowsBox = container.NewVBox()
 	c.channelList = container.NewVScroll(c.channelRowsBox)
 
@@ -364,7 +365,7 @@ func (c *controller) buildUI(defaults config.Options) {
 	c.saveSettings = widget.NewButton("Save", c.saveDraftSettings)
 	c.cancelSettings = widget.NewButton("Cancel", c.cancelDraftSettings)
 	settingsActions := container.NewHBox(layout.NewSpacer(), c.saveSettings, c.horizontalGap(tightPad), c.cancelSettings)
-	statusRow := container.NewHBox(c.statusBadge, c.statusText)
+	statusRow := c.statusLine.Object()
 	controls := container.NewHBox(c.startButton, c.horizontalGap(tightPad), c.stopButton, c.horizontalGap(widePad), c.showLogsButton, widget.NewLabel("Status:"), statusRow)
 
 	overviewTop := container.NewPadded(container.NewVBox(
@@ -486,9 +487,9 @@ func (c *controller) horizontalGap(width float32) fyne.CanvasObject {
 }
 
 func (c *controller) setStatus(text string, dotColor color.NRGBA) {
-	c.statusText.SetText(text)
-	if c.statusBadge != nil {
-		c.statusBadge.SetStatus(dotColor, "")
+	if c.statusLine != nil {
+		c.statusLine.SetText(text)
+		c.statusLine.SetStatus(dotColor, "")
 	}
 }
 
@@ -698,21 +699,24 @@ func (c *controller) rebuildChannelRows() {
 	}
 	rows := make([]fyne.CanvasObject, 0, len(c.channelRows))
 	for _, item := range c.channelRows {
-		badge := newStatusBadge(statusBadgeHandlers{
+		status := newStatusBadgeLabel(statusBadgeHandlers{
 			Show: c.showHoverTooltip,
 			Move: c.moveHoverTooltip,
 			Hide: c.hideHoverTooltip,
+		}, "", statusBadgeLabelOptions{
+			DotNudgeY: -1,
+			GapX:      0,
 		})
-		badge.SetStatus(item.Health.Color, item.Health.Reason)
+		status.SetStatus(item.Health.Color, item.Health.Reason)
 		name := item.Channel.Name
 		if strings.TrimSpace(name) == "" {
 			name = item.Channel.ID
 		}
-		label := widget.NewLabel(name)
+		label := status.Label()
+		label.SetText(name)
 		label.Truncation = fyne.TextTruncateEllipsis
 		label.Wrapping = fyne.TextWrapOff
-		row := container.NewBorder(nil, nil, container.NewCenter(badge), nil, label)
-		rows = append(rows, row)
+		rows = append(rows, status.Object())
 	}
 	c.channelRowsBox.Objects = rows
 	c.channelRowsBox.Refresh()

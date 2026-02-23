@@ -9,7 +9,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -28,7 +27,10 @@ type statusBadge struct {
 	fill    color.NRGBA
 	tooltip string
 
-	dot *canvas.Circle
+	dot     *canvas.Circle
+	compact bool
+
+	dotNudgeY float32
 
 	onTooltipShow func(string, fyne.Position)
 	onTooltipMove func(fyne.Position)
@@ -77,22 +79,70 @@ func (b *statusBadge) SetStatus(fill color.NRGBA, tooltip string) {
 	}
 }
 
+func (b *statusBadge) SetDotNudgeY(value float32) {
+	b.dotNudgeY = value
+	b.Refresh()
+}
+
+func (b *statusBadge) SetCompact(compact bool) {
+	b.compact = compact
+	b.Refresh()
+}
+
 func (b *statusBadge) MinSize() fyne.Size {
 	text := fyne.MeasureText("M", theme.TextSize(), fyne.TextStyle{})
 	height := text.Height
 	if height < badgeDotSize+2 {
 		height = badgeDotSize + 2
 	}
-	height = max(height, badgeHoverTarget)
-	return fyne.NewSize(badgeHoverTarget, height)
+	width := badgeHoverTarget
+	if b.compact {
+		width = badgeDotSize
+	}
+	return fyne.NewSize(width, height)
 }
 
 func (b *statusBadge) CreateRenderer() fyne.WidgetRenderer {
 	anchor := canvas.NewRectangle(color.Transparent)
 	anchor.SetMinSize(b.MinSize())
-	dot := container.NewGridWrap(fyne.NewSize(badgeDotSize, badgeDotSize), b.dot)
-	wrapped := container.NewStack(anchor, container.NewCenter(dot))
-	return widget.NewSimpleRenderer(wrapped)
+	return &statusBadgeRenderer{
+		badge:   b,
+		anchor:  anchor,
+		objects: []fyne.CanvasObject{anchor, b.dot},
+	}
+}
+
+type statusBadgeRenderer struct {
+	badge   *statusBadge
+	anchor  *canvas.Rectangle
+	objects []fyne.CanvasObject
+}
+
+func (r *statusBadgeRenderer) Destroy() {}
+
+func (r *statusBadgeRenderer) Layout(size fyne.Size) {
+	r.anchor.Resize(size)
+	r.badge.dot.Resize(fyne.NewSize(badgeDotSize, badgeDotSize))
+	x := (size.Width - badgeDotSize) / 2
+	y := (size.Height-badgeDotSize)/2 - r.badge.dotNudgeY
+	if y < 0 {
+		y = 0
+	}
+	r.badge.dot.Move(fyne.NewPos(x, y))
+}
+
+func (r *statusBadgeRenderer) MinSize() fyne.Size {
+	return r.badge.MinSize()
+}
+
+func (r *statusBadgeRenderer) Objects() []fyne.CanvasObject {
+	return r.objects
+}
+
+func (r *statusBadgeRenderer) Refresh() {
+	r.badge.dot.FillColor = r.badge.fill
+	r.badge.dot.Refresh()
+	r.Layout(r.badge.Size())
 }
 
 func (b *statusBadge) MouseIn(ev *desktop.MouseEvent) {

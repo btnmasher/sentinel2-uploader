@@ -37,6 +37,7 @@ downloads/
 sentinel2-*
 *.zip
 .cache/
+*.syso
 
 # local dev artifacts
 pb_data/

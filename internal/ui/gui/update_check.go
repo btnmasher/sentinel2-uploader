@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -158,12 +160,88 @@ func (c *controller) promptForUpdate(latest latestRelease) {
 				c.logger.Warn("failed to parse release url", logging.Field("url", dest), logging.Field("error", err))
 				return
 			}
-			if err := c.app.OpenURL(u); err != nil {
+			if err := c.openExternalURL(u, dest); err != nil {
 				c.logger.Warn("failed to open release url", logging.Field("url", dest), logging.Field("error", err))
 			}
 		},
 		c.win,
 	)
+}
+
+func (c *controller) openExternalURL(parsed *url.URL, raw string) error {
+	c.logger.Debug("open url attempt: app.OpenURL", logging.Field("url", raw))
+	if parsed != nil {
+		if err := c.app.OpenURL(parsed); err == nil {
+			c.logger.Info("open url success", logging.Field("method", "app.OpenURL"), logging.Field("url", raw))
+			return nil
+		} else {
+			c.logger.Warn("open url failed",
+				logging.Field("method", "app.OpenURL"),
+				logging.Field("url", raw),
+				logging.Field("error", err),
+			)
+		}
+	}
+	return c.launchURLWithOS(raw)
+}
+
+func (c *controller) launchURLWithOS(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("empty url")
+	}
+	switch runtime.GOOS {
+	case "windows":
+		c.logger.Debug("open url attempt: windows rundll32", logging.Field("url", raw))
+		if err := exec.Command("rundll32", "url.dll,FileProtocolHandler", raw).Start(); err == nil {
+			c.logger.Info("open url success", logging.Field("method", "rundll32"), logging.Field("url", raw))
+			return nil
+		} else {
+			c.logger.Warn("open url failed",
+				logging.Field("method", "rundll32"),
+				logging.Field("url", raw),
+				logging.Field("error", err),
+			)
+		}
+		c.logger.Debug("open url attempt: windows cmd start", logging.Field("url", raw))
+		if err := exec.Command("cmd", "/c", "start", "", raw).Start(); err == nil {
+			c.logger.Info("open url success", logging.Field("method", "cmd_start"), logging.Field("url", raw))
+			return nil
+		} else {
+			c.logger.Warn("open url failed",
+				logging.Field("method", "cmd_start"),
+				logging.Field("url", raw),
+				logging.Field("error", err),
+			)
+			return err
+		}
+	case "darwin":
+		c.logger.Debug("open url attempt: darwin open", logging.Field("url", raw))
+		if err := exec.Command("open", raw).Start(); err == nil {
+			c.logger.Info("open url success", logging.Field("method", "open"), logging.Field("url", raw))
+			return nil
+		} else {
+			c.logger.Warn("open url failed",
+				logging.Field("method", "open"),
+				logging.Field("url", raw),
+				logging.Field("error", err),
+			)
+			return err
+		}
+	default:
+		c.logger.Debug("open url attempt: xdg-open", logging.Field("url", raw))
+		if err := exec.Command("xdg-open", raw).Start(); err == nil {
+			c.logger.Info("open url success", logging.Field("method", "xdg-open"), logging.Field("url", raw))
+			return nil
+		} else {
+			c.logger.Warn("open url failed",
+				logging.Field("method", "xdg-open"),
+				logging.Field("url", raw),
+				logging.Field("error", err),
+			)
+			return err
+		}
+	}
 }
 
 func (c *controller) shouldSuppressUpdatePrompt(tag string) bool {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
@@ -12,6 +13,8 @@ import (
 	"sentinel2-uploader/internal/logging"
 	"sentinel2-uploader/internal/pbrealtime"
 )
+
+const realtimeKeepaliveTopic = "realtime.keepalive"
 
 type SyncHooks struct {
 	OnConnected                           func(string, pbrealtime.Session, uint64)
@@ -81,6 +84,7 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 		retry.Reset()
 
 		useInitialSession := initialSession != nil
+		forceHTTP1Fallback := false
 		var sessionEpoch uint64
 		for {
 			_, retryErr := backoff.Retry(ctx, func() (struct{}, error) {
@@ -101,7 +105,7 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 						hooks.OnConnected(topic, session, attemptEpoch)
 					}
 				}
-				err := c.runRealtimeConfigSession(ctx, pushUpdate, runHooks, prefetched, attemptEpoch)
+				err := c.runRealtimeConfigSession(ctx, pushUpdate, runHooks, prefetched, attemptEpoch, forceHTTP1Fallback)
 				if err == nil {
 					return struct{}{}, nil
 				}
@@ -144,6 +148,12 @@ func (c *SentinelClient) StartChannelConfigSync(ctx context.Context, initial []C
 			}
 			if hooks.ShouldContinueAfterReconnectExhausted != nil &&
 				hooks.ShouldContinueAfterReconnectExhausted(retryErr, reconnectMaxElapsed) {
+				if !forceHTTP1Fallback {
+					forceHTTP1Fallback = true
+					c.logger.Warn("switching realtime stream to HTTP/1.1 fallback after reconnect exhaustion",
+						logging.Field("error", retryErr),
+					)
+				}
 				c.logger.Warn(
 					"realtime reconnect window extended due to recent successful API activity",
 					logging.Field("error", retryErr),
@@ -172,7 +182,7 @@ func isExpectedRealtimeReconnect(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, pbrealtime.ErrSessionRefreshDue)
 }
 
-func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate func([]ChannelConfig), hooks SyncHooks, prefetched *pbrealtime.Session, epoch uint64) error {
+func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate func([]ChannelConfig), hooks SyncHooks, prefetched *pbrealtime.Session, epoch uint64, forceHTTP1 bool) error {
 	// Acquire short-lived realtime credentials scoped to uploader subscriptions.
 	auth := pbrealtime.AuthClient{
 		HTTP:             c.http,
@@ -203,6 +213,8 @@ func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate 
 		HTTP:        c.http,
 		RealtimeURL: c.endpoints.RealtimeURL,
 		RefreshLead: realtimeRefreshLead,
+		ExtraTopics: []string{realtimeKeepaliveTopic},
+		ForceHTTP1:  forceHTTP1,
 		Logger:      c.logger,
 	}
 
@@ -232,6 +244,9 @@ func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate 
 			onUpdate(channels)
 		},
 		OnUnhandled: func(event pbrealtime.Event) {
+			if strings.TrimSpace(event.Name) == realtimeKeepaliveTopic {
+				return
+			}
 			c.logger.Debug("ignoring realtime event",
 				logging.Field("event", event.Name),
 				logging.Field("data", logging.FormatHTTPPayload(event.Data)),
@@ -243,7 +258,7 @@ func (c *SentinelClient) runRealtimeConfigSession(ctx context.Context, onUpdate 
 		refreshed, refreshErr := c.RefreshSession(ctx, session.Token)
 		if refreshErr == nil {
 			c.logger.Info("realtime short session refresh succeeded; reconnecting stream")
-			return c.runRealtimeConfigSession(ctx, onUpdate, hooks, &refreshed, epoch)
+			return c.runRealtimeConfigSession(ctx, onUpdate, hooks, &refreshed, epoch, forceHTTP1)
 		}
 		c.logger.Warn("realtime short session refresh failed", logging.Field("error", refreshErr))
 	}
