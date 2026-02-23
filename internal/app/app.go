@@ -160,6 +160,10 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 		OnError: func(err error) {
 			a.logger.Warn("log monitor callback error", logging.Field("error", err))
 		},
+		OnHealthTransition: func(event evelogs.HealthTransition) {
+			// Force immediate UI health recompute when monitor detects stale/missing transitions.
+			a.notifyChannels(event.Channels)
+		},
 	})
 	if err := monitor.Prepare(); err != nil {
 		return err
@@ -183,6 +187,13 @@ func (a *UploaderApp) RunContext(ctx context.Context) error {
 		},
 		OnDisconnected: func(err error, epoch uint64) {
 			sessionState.clearConnection()
+			if runCtx.Err() == nil && errors.Is(err, pbrealtime.ErrSessionRefreshDue) {
+				a.logger.Debug("ignoring reconnect status transition: realtime refresh boundary reached",
+					logging.Field("epoch", epoch),
+					logging.Field("error", err),
+				)
+				return
+			}
 			a.logger.Warn("realtime epoch disconnected",
 				logging.Field("epoch", epoch),
 				logging.Field("error", err),

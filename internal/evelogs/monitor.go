@@ -290,6 +290,11 @@ func (m *Monitor) reportChannelHealthTransitions(now time.Time) {
 			continue
 		}
 		m.health[id] = next
+		previousState := "unknown"
+		if had {
+			previousState = healthStateName(prev)
+		}
+		currentState := healthStateName(next)
 		switch next {
 		case channelHealthMissing:
 			m.logger.Warn("channel log not found",
@@ -300,6 +305,28 @@ func (m *Monitor) reportChannelHealthTransitions(now time.Time) {
 				logging.Field("channel", ch.Name),
 				logging.Field("channel_id", ch.ID))
 		}
+		if m.callbacks.OnHealthTransition != nil {
+			m.callbacks.OnHealthTransition(HealthTransition{
+				ChannelID: id,
+				Channel:   ch,
+				Previous:  previousState,
+				Current:   currentState,
+				Channels:  append([]client.ChannelConfig(nil), m.channels...),
+			})
+		}
+	}
+}
+
+func healthStateName(state channelHealthState) string {
+	switch state {
+	case channelHealthOK:
+		return "ok"
+	case channelHealthStale:
+		return "stale"
+	case channelHealthMissing:
+		return "missing"
+	default:
+		return "unknown"
 	}
 }
 

@@ -34,10 +34,11 @@ type MonitorOptions struct {
 }
 
 type MonitorCallbacks struct {
-	OnReport    func(ReportEvent) error
-	OnError     func(error)
-	OnTracked   func(LogSelection)
-	OnUntracked func(string)
+	OnReport           func(ReportEvent) error
+	OnError            func(error)
+	OnTracked          func(LogSelection)
+	OnUntracked        func(string)
+	OnHealthTransition func(HealthTransition)
 }
 
 type ReportEvent struct {
@@ -84,3 +85,11 @@ const (
 	channelHealthStale
 	channelHealthMissing
 )
+
+type HealthTransition struct {
+	ChannelID string
+	Channel   client.ChannelConfig
+	Previous  string
+	Current   string
+	Channels  []client.ChannelConfig
+}
